@@ -178,6 +178,8 @@ int main(int argc,char** argv){
 try {
     uint32_t shifts=argc>1 ? uint32_t(std::strtoul(argv[1],nullptr,10)) : 1;
     if(shifts!=1&&shifts!=10)throw std::runtime_error("usage: tile_run [1|10]");
+    uint32_t sieve_workgroup=std::getenv("AP27_SIEVE_WORKGROUP") ? uint32_t(std::strtoul(std::getenv("AP27_SIEVE_WORKGROUP"),nullptr,10)) : 512;
+    if(sieve_workgroup!=256&&sieve_workgroup!=512&&sieve_workgroup!=1024)throw std::runtime_error("invalid AP27_SIEVE_WORKGROUP");
     auto wall0=std::chrono::steady_clock::now();uint64_t cpu0=process_ns();
     const uint64_t step=uint64_t(K)*PRIM23,s59=residue(PRES8);
     SeedData seeds=make_seeds(); auto expected_n59=generate_cpu(seeds);
@@ -194,19 +196,28 @@ try {
     uint32_t family=nq;for(uint32_t i=0;i<nq;i++)if(qprops[i].queueFlags&VK_QUEUE_COMPUTE_BIT){family=i;break;}
     if(family==nq||!qprops[family].timestampValidBits)throw std::runtime_error("V3D compute/timestamps unavailable");
     float priority=1;VkDeviceQueueCreateInfo qc{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};qc.queueFamilyIndex=family;qc.queueCount=1;qc.pQueuePriorities=&priority;
+    const bool profile=std::getenv("AP27_PERF")!=nullptr;
+    VkPhysicalDevicePerformanceQueryFeaturesKHR perf_feature{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PERFORMANCE_QUERY_FEATURES_KHR};perf_feature.performanceCounterQueryPools=VK_TRUE;
     VkPhysicalDevicePipelineExecutablePropertiesFeaturesKHR feature{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_EXECUTABLE_PROPERTIES_FEATURES_KHR};feature.pipelineExecutableInfo=VK_TRUE;
-    const char* extension=VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME;
-    VkDeviceCreateInfo dc{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};dc.pNext=&feature;dc.queueCreateInfoCount=1;dc.pQueueCreateInfos=&qc;dc.enabledExtensionCount=1;dc.ppEnabledExtensionNames=&extension;
+    if(profile)feature.pNext=&perf_feature;
+    const char* extensions[]={VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME,VK_KHR_PERFORMANCE_QUERY_EXTENSION_NAME};
+    VkDeviceCreateInfo dc{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};dc.pNext=&feature;dc.queueCreateInfoCount=1;dc.pQueueCreateInfos=&qc;dc.enabledExtensionCount=profile?2:1;dc.ppEnabledExtensionNames=extensions;
     VkDevice dev;check(vkCreateDevice(gpu,&dc,nullptr,&dev),"V3D device");VkQueue queue;vkGetDeviceQueue(dev,family,0,&queue);
     std::array<Buffer,7> b={
         make_buffer(dev,gpu,sizeof(SeedData),0),
         make_buffer(dev,gpu,sizeof(U2)*N59_COUNT,0),
-        make_buffer(dev,gpu,sizeof(U2)*mask_count,0),
+        make_buffer(dev,gpu,sizeof(U2)*(mask_count+2*(small_primes.size()-5)),0),
         make_buffer(dev,gpu,sizeof(U4)*CAP,0),
         make_buffer(dev,gpu,sizeof(U2)*CAP,0),
         make_buffer(dev,gpu,sizeof(U4)*CAP,0),
         make_buffer(dev,gpu,64,VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT)};
     std::memcpy(b[0].ptr,&seeds,sizeof(seeds));
+    U2* mask_words=static_cast<U2*>(b[2].ptr);
+    for(size_t i=5;i<small_primes.size();i++){
+        const auto& p=small_primes[i];
+        mask_words[mask_count+2*(i-5)]={p.p,p.coeff};
+        mask_words[mask_count+2*(i-5)+1]={p.offset,uint32_t((uint64_t(1)<<32)/p.p)};
+    }
     VkDescriptorSetLayoutBinding lb[7]{};for(uint32_t i=0;i<7;i++){lb[i].binding=i;lb[i].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;lb[i].descriptorCount=1;lb[i].stageFlags=VK_SHADER_STAGE_COMPUTE_BIT;}
     VkDescriptorSetLayoutCreateInfo lc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};lc.bindingCount=7;lc.pBindings=lb;
     VkDescriptorSetLayout dsl;check(vkCreateDescriptorSetLayout(dev,&lc,nullptr,&dsl),"descriptor layout");
@@ -245,6 +256,28 @@ try {
     }
     VkQueryPoolCreateInfo qpc{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};qpc.queryType=VK_QUERY_TYPE_TIMESTAMP;qpc.queryCount=12;
     VkQueryPool qp;check(vkCreateQueryPool(dev,&qpc,nullptr,&qp),"timestamp pool");
+    VkQueryPool perf_qp{};
+    std::vector<std::string> perf_names;
+    if(profile){
+        auto enumerate=reinterpret_cast<PFN_vkEnumeratePhysicalDeviceQueueFamilyPerformanceQueryCountersKHR>(vkGetInstanceProcAddr(instance,"vkEnumeratePhysicalDeviceQueueFamilyPerformanceQueryCountersKHR"));
+        auto passes=reinterpret_cast<PFN_vkGetPhysicalDeviceQueueFamilyPerformanceQueryPassesKHR>(vkGetInstanceProcAddr(instance,"vkGetPhysicalDeviceQueueFamilyPerformanceQueryPassesKHR"));
+        const char* wanted[]={"cycle-count","compute-active-cycles","QPU-wait-bubble","QPU-ic-miss-bubble","QPU-active","QPU-stalls","QPU-stalls-TMU","QPU-stalls-VPM","QPU-stalls-uniforms","QPU-stalls-SFU","QPU-stalls-other","TMU-active-cycles","TMU-stalled-cycles","L2T-total-cache-hit","L2T-total-cache-miss","L2T-TMU-read-hits","L2T-TMU-read-miss","L2T-stalls-read-data","L2T-stalls-queue-full","AXI-read-trans","AXI-write-trans","AXI-read-wait-cycles","AXI-write-wait-cycles","QPU-total-instr-cache-hit","QPU-total-instr-cache-miss"};
+        uint32_t count=0;check(enumerate(gpu,family,&count,nullptr,nullptr),"enumerate perf count");
+        std::vector<VkPerformanceCounterKHR> counters(count);std::vector<VkPerformanceCounterDescriptionKHR> descriptions(count);
+        for(auto& c:counters)c.sType=VK_STRUCTURE_TYPE_PERFORMANCE_COUNTER_KHR;
+        for(auto& d:descriptions)d.sType=VK_STRUCTURE_TYPE_PERFORMANCE_COUNTER_DESCRIPTION_KHR;
+        check(enumerate(gpu,family,&count,counters.data(),descriptions.data()),"enumerate perf counters");
+        std::vector<uint32_t> indices;
+        for(const char* name:wanted)for(uint32_t i=0;i<count;i++)if(std::strcmp(name,descriptions[i].name)==0){indices.push_back(i);perf_names.emplace_back(name);break;}
+        VkQueryPoolPerformanceCreateInfoKHR ppc{VK_STRUCTURE_TYPE_QUERY_POOL_PERFORMANCE_CREATE_INFO_KHR};ppc.queueFamilyIndex=family;ppc.counterIndexCount=indices.size();ppc.pCounterIndices=indices.data();
+        uint32_t np=0;passes(gpu,&ppc,&np);std::printf("perf_counters=%zu passes=%u\n",indices.size(),np);
+        if(np!=1)throw std::runtime_error("performance query requires multiple passes");
+        VkQueryPoolCreateInfo pqc{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};pqc.pNext=&ppc;pqc.queryType=VK_QUERY_TYPE_PERFORMANCE_QUERY_KHR;pqc.queryCount=1;
+        check(vkCreateQueryPool(dev,&pqc,nullptr,&perf_qp),"performance query pool");
+        auto acquire=reinterpret_cast<PFN_vkAcquireProfilingLockKHR>(vkGetDeviceProcAddr(dev,"vkAcquireProfilingLockKHR"));
+        VkAcquireProfilingLockInfoKHR lock{VK_STRUCTURE_TYPE_ACQUIRE_PROFILING_LOCK_INFO_KHR};lock.timeout=10000000000ULL;
+        check(acquire(dev,&lock),"acquire profiling lock");
+    }
     VkCommandPoolCreateInfo cpc{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};cpc.queueFamilyIndex=family;cpc.flags=VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     VkCommandPool command_pool;check(vkCreateCommandPool(dev,&cpc,nullptr,&command_pool),"command pool");
     VkCommandBufferAllocateInfo ca{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};ca.commandPool=command_pool;ca.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY;ca.commandBufferCount=1;
@@ -255,7 +288,7 @@ try {
     for(uint32_t shift_i=0;shift_i<shifts;shift_i++){
         uint32_t shift=64*shift_i;
         auto ref_start=std::chrono::steady_clock::now();
-        auto masks=make_masks(step,shift);std::memcpy(b[2].ptr,masks.data(),b[2].size);
+        auto masks=make_masks(step,shift);std::memcpy(b[2].ptr,masks.data(),sizeof(U2)*mask_count);
         auto sieve_ref=sieve_cpu(expected_n59,masks,s59);
         auto cand_ref=compact_cpu(sieve_ref,shift);
         std::vector<Outcome> outcome_ref;outcome_ref.reserve(cand_ref.size());
@@ -266,13 +299,15 @@ try {
         check(vkResetCommandBuffer(cb,0),"reset command buffer");
         VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};check(vkBeginCommandBuffer(cb,&begin),"begin command buffer");
         vkCmdResetQueryPool(cb,qp,0,12);
+        if(profile)vkCmdResetQueryPool(cb,perf_qp,0,1);
         vkCmdBindDescriptorSets(cb,VK_PIPELINE_BIND_POINT_COMPUTE,layout,0,1,&set,0,nullptr);
         vkCmdPushConstants(cb,layout,VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(push),&push);
         for(uint32_t stage=0;stage<6;stage++){
             vkCmdWriteTimestamp(cb,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,qp,2*stage);
+            if(profile&&stage==1)vkCmdBeginQuery(cb,perf_qp,0,0);
             vkCmdBindPipeline(cb,VK_PIPELINE_BIND_POINT_COMPUTE,pipelines[stage]);
             if(stage==0)vkCmdDispatch(cb,(N59_COUNT+63)/64,1,1);
-            else if(stage==1)vkCmdDispatch(cb,(N59_COUNT+511)/512,1,1);
+            else if(stage==1)vkCmdDispatch(cb,(N59_COUNT+sieve_workgroup-1)/sieve_workgroup,1,1);
             else if(stage==2||stage==4)vkCmdDispatch(cb,1,1,1);
             else vkCmdDispatchIndirect(cb,b[6].b,(stage==3?4:8)*sizeof(uint32_t));
             VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};barrier.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT;
@@ -280,6 +315,7 @@ try {
             if(stage==5)barrier.dstAccessMask=VK_ACCESS_HOST_READ_BIT;
             VkPipelineStageFlags dst=stage==5?VK_PIPELINE_STAGE_HOST_BIT:(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT|VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT);
             vkCmdPipelineBarrier(cb,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,dst,0,1,&barrier,0,nullptr,0,nullptr);
+            if(profile&&stage==1)vkCmdEndQuery(cb,perf_qp,0);
             vkCmdWriteTimestamp(cb,VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,qp,2*stage+1);
         }
         check(vkEndCommandBuffer(cb),"end command buffer");
@@ -294,11 +330,20 @@ try {
         uint64_t ticks[12]{};check(vkGetQueryPoolResults(dev,qp,0,12,sizeof(ticks),ticks,sizeof(uint64_t),VK_QUERY_RESULT_64_BIT|VK_QUERY_RESULT_WAIT_BIT),"get timestamps");
         double gpu_stage[6]{};double gpu_ms=0;
         for(int s=0;s<6;s++){gpu_stage[s]=double(ticks[2*s+1]-ticks[2*s])*props.limits.timestampPeriod/1e6;gpu_ms+=gpu_stage[s];}
+        double inter_stage_ms=0;
+        for(int s=0;s<5;s++)inter_stage_ms+=double(ticks[2*s+2]-ticks[2*s+1])*props.limits.timestampPeriod/1e6;
         total_gpu_ms+=gpu_ms;
+        if(profile){
+            std::vector<VkPerformanceCounterResultKHR> values(perf_names.size());
+            check(vkGetQueryPoolResults(dev,perf_qp,0,1,values.size()*sizeof(values[0]),values.data(),values.size()*sizeof(values[0]),VK_QUERY_RESULT_WAIT_BIT),"get performance counters");
+            std::printf("PERF shift=%u",shift);
+            for(size_t i=0;i<values.size();i++)std::printf(" %s=%llu",perf_names[i].c_str(),(unsigned long long)values[i].uint64);
+            std::printf("\n");
+        }
         const uint32_t* control=static_cast<const uint32_t*>(b[6].ptr);
         uint32_t nr=control[0],nc=control[1],overflow=control[2],hits=control[3];
-        std::printf("shift=%u gpu_ms setup=%.3f sieve=%.3f prep_compact=%.3f compact=%.3f prep_check=%.3f check=%.3f sum=%.3f wall_ms=%.3f process_cpu_ms=%.3f records=%u candidates=%u hits=%u overflow=%u ref_records=%zu ref_candidates=%zu\n",
-                    shift,gpu_stage[0],gpu_stage[1],gpu_stage[2],gpu_stage[3],gpu_stage[4],gpu_stage[5],gpu_ms,window_wall_ms,window_cpu_ms,nr,nc,hits,overflow,sieve_ref.size(),cand_ref.size());
+        std::printf("shift=%u gpu_ms setup=%.3f sieve=%.3f prep_compact=%.3f compact=%.3f prep_check=%.3f check=%.3f sum=%.3f inter_stage=%.3f span=%.3f wall_ms=%.3f process_cpu_ms=%.3f records=%u candidates=%u hits=%u overflow=%u ref_records=%zu ref_candidates=%zu\n",
+                    shift,gpu_stage[0],gpu_stage[1],gpu_stage[2],gpu_stage[3],gpu_stage[4],gpu_stage[5],gpu_ms,inter_stage_ms,double(ticks[11]-ticks[0])*props.limits.timestampPeriod/1e6,window_wall_ms,window_cpu_ms,nr,nc,hits,overflow,sieve_ref.size(),cand_ref.size());
         if(overflow)throw std::runtime_error("bounded output overflow; retry with larger capacity or smaller tile");
         const U2* actual_n59=static_cast<const U2*>(b[1].ptr);
         for(uint32_t i=0;i<N59_COUNT;i++)if(pack(actual_n59[i].lo,actual_n59[i].hi)!=expected_n59[i]){
@@ -342,6 +387,7 @@ try {
     auto wall1=std::chrono::steady_clock::now();double total_wall_ms=std::chrono::duration<double,std::milli>(wall1-wall0).count();double total_cpu_ms=double(process_ns()-cpu0)/1e6;
     std::printf("TOTAL shifts=%u gpu_stage_sum_ms=%.3f submit_wait_wall_ms=%.3f submit_wait_process_cpu_ms=%.3f cpu_reference_ms=%.3f process_wall_ms=%.3f process_cpu_ms=%.3f submissions=%u fence_waits=%u mapped_readbacks=%u\n",shifts,total_gpu_ms,total_gpu_window_wall_ms,total_gpu_window_cpu_ms,total_ref_ms,total_wall_ms,total_cpu_ms,shifts,shifts,5*shifts);
     vkDestroyFence(dev,fence,nullptr);vkDestroyCommandPool(dev,command_pool,nullptr);vkDestroyQueryPool(dev,qp,nullptr);
+    if(profile){auto release=reinterpret_cast<PFN_vkReleaseProfilingLockKHR>(vkGetDeviceProcAddr(dev,"vkReleaseProfilingLockKHR"));release(dev);vkDestroyQueryPool(dev,perf_qp,nullptr);}
     for(int i=0;i<6;i++){vkDestroyPipeline(dev,pipelines[i],nullptr);vkDestroyShaderModule(dev,modules[i],nullptr);}
     vkDestroyDescriptorPool(dev,pool,nullptr);vkDestroyPipelineLayout(dev,layout,nullptr);vkDestroyDescriptorSetLayout(dev,dsl,nullptr);
     for(auto& x:b)destroy(dev,x);

@@ -54,7 +54,7 @@ cmake --build build --target package_boinc
 
 `build/boinc_package/` contains `ap27_v3d`, six shaders, the BOINC shared libraries selected at build time, and a generated `app_info.xml`. It also copies a BOINC copyright notice when one is available with the installed libraries. The template matches PrimeGrid `ap26` version 2.12 with plan class `cpu_AP27mt`; confirm that this matches the work units assigned to your client. **Stop the BOINC client completely before replacing any file in the project directory**, install the package with BOINC ownership and permissions, then restart the client and check its event log. Suspending a task is insufficient: BOINC checks application files against sizes recorded when it read `app_info.xml`. Never copy account keys, client state, task slots, or checkpoint files from another host. The package target only stages files; it does not alter a running BOINC installation.
 
-The current implementation keeps one Vulkan device, mapped buffers, descriptor set, six pipelines, command buffer, and fence for the application's lifetime. It uses a 512-lane V3D sieve workgroup and advances residues for the first five small primes. One submission and fence wait are used per tile so the existing checkpoint boundary remains clear.
+The current implementation keeps one Vulkan device, mapped buffers, descriptor set, six pipelines, command buffer, and fence for the application's lifetime. It uses a 512-lane V3D sieve workgroup and advances residues for the first six small primes. One submission and fence wait are used per tile so the existing checkpoint boundary remains clear.
 
 ## Useful BOINC commands
 

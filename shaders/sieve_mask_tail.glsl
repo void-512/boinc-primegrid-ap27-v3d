@@ -1,5 +1,4 @@
 uvec2 sieve_mask_tail(uint a, uint b, uvec2 m) {
-    m &= mask_data.m[(a+40u*b)%83u+351u];
     m &= mask_data.m[(a+78u*b)%89u+434u];
     m &= mask_data.m[(a+33u*b)%97u+523u];
     m &= mask_data.m[(a+17u*b)%101u+620u];

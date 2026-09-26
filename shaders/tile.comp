@@ -83,18 +83,20 @@ void main() {
     uint b=(n.x>>30)|(n.y<<2);
     uint sa=stride.x&0x3fffffffu;
     uint sb=(stride.x>>30)|(stride.y<<2);
-    // First five entries of sieve_mask.glsl; advance each residue modulo p.
+    // First six entries of sieve_mask.glsl; advance each residue modulo p.
     uint r61=(a+60u*b)%61u, d61=(sa+60u*sb)%61u;
     uint r67=(a+25u*b)%67u, d67=(sa+25u*sb)%67u;
     uint r71=(a+20u*b)%71u, d71=(sa+20u*sb)%71u;
     uint r73=(a+8u*b)%73u, d73=(sa+8u*sb)%73u;
     uint r79=(a+52u*b)%79u, d79=(sa+52u*sb)%79u;
+    uint r83=(a+40u*b)%83u, d83=(sa+40u*sb)%83u;
     for(uint iter=0u;iter<35u;iter++) {
         uvec2 bits=mask_data.m[r61];
         bits&=mask_data.m[61u+r67];
         bits&=mask_data.m[128u+r71];
         bits&=mask_data.m[199u+r73];
         bits&=mask_data.m[272u+r79];
+        bits&=mask_data.m[351u+r83];
         if((bits.x|bits.y)!=0u) {
             a=n.x&0x3fffffffu;
             b=(n.x>>30)|(n.y<<2);
@@ -114,6 +116,7 @@ void main() {
         r71=advance_residue(r71,d71,71u,33u,wrapped);
         r73=advance_residue(r73,d73,73u,53u,wrapped);
         r79=advance_residue(r79,d79,79u,21u,wrapped);
+        r83=advance_residue(r83,d83,83u,73u,wrapped);
     }
 #elif STAGE==2
     if(idx!=0u) return;
