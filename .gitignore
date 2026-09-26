@@ -1,0 +1,34 @@
+# Local research inputs, historical experiments, reports, and packages
+/.local/
+/dnetc524-linux-arm64/
+/dnetc524-linux-arm64.tar.gz
+/.codex/
+/.agents/
+
+# Builds, packaged binaries, profiler output
+/build*/
+**/__pycache__/
+*.pyc
+*.spv
+*.spvasm
+*.o
+*.so
+*.so.*
+*.a
+*.exe
+*.log
+
+# BOINC state, credentials, results, and local task data
+account_*.xml
+client_state*.xml
+gui_rpc_auth.cfg
+global_prefs*.xml
+cc_config.xml
+init_data.xml
+AP26-state*.txt
+SOL-AP26.txt
+stderr.txt
+stdout.txt
+boinc_lockfile
+boinc_mmap_file
+boinc_task_state.xml

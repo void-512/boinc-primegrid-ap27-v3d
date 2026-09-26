@@ -1,0 +1,183 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#define USE_UMUL_EXTENDED 1
+#define INVERSE_FAST 1
+#include "ap27_math.glsl"
+
+#if STAGE==1
+layout(local_size_x=512) in;
+#else
+layout(local_size_x=64) in;
+#endif
+layout(std430,set=0,binding=0) readonly buffer Seeds {
+    uvec2 n43[32];
+    uvec2 offsets[71]; // 19 S43, 23 S47, 29 S53 multiples modulo MOD
+} seed_data;
+layout(std430,set=0,binding=1) buffer N59 { uvec2 n[]; } n59_data;
+layout(std430,set=0,binding=2) readonly buffer Masks { uvec2 m[]; } mask_data;
+layout(std430,set=0,binding=3) buffer SieveRecords { uvec4 r[]; } sieve_data;
+layout(std430,set=0,binding=4) buffer Candidates { uvec2 n[]; } candidate_data;
+layout(std430,set=0,binding=5) buffer Statuses { uvec4 s[]; } status_data;
+layout(std430,set=0,binding=6) buffer Control { uint c[]; } control_data;
+layout(push_constant) uniform Parameters {
+    uvec4 values; // S59 low/high, STEP low/high
+    uvec4 sizes;  // shift, n59 count, output capacity, reserved
+} params;
+
+const uvec2 MOD=uvec2(2601388630u,60200u);
+
+#if STAGE==1
+#include "sieve_mask_tail.glsl"
+
+uint advance_residue(uint r, uint stride_r, uint p, uint mod_r, bool wrapped) {
+    int next=int(r)+int(stride_r)-(wrapped ? int(mod_r) : 0);
+    if(next<0) next+=int(p);
+    if(next>=int(p)) next-=int(p);
+    return uint(next);
+}
+#endif
+
+uvec2 residue_add(uvec2 a,uvec2 b) {
+    uvec2 s=add64(a,b);
+    return !lt64(s,MOD) ? sub64(s,MOD) : s;
+}
+uvec2 small_multiple(uint t) {
+    uvec2 p=mul32wide(MOD.x,t);
+    return uvec2(p.x,p.y+MOD.y*t);
+}
+bool passes_small_primes(uvec2 n) {
+    if(((n.y%7u)*4u+n.x%7u)%7u==0u) return false;
+    if(((n.y%11u)*4u+n.x%11u)%11u==0u) return false;
+    if(((n.y%13u)*9u+n.x%13u)%13u==0u) return false;
+    if(((n.y%17u)+n.x%17u)%17u==0u) return false;
+    if(((n.y%19u)*6u+n.x%19u)%19u==0u) return false;
+    if(((n.y%23u)*12u+n.x%23u)%23u==0u) return false;
+    return true;
+}
+void compact_bit(uvec2 base,uint bit) {
+    uvec2 n=add64(base,small_multiple(bit+params.sizes.x));
+    if(!passes_small_primes(n)) return;
+    uint slot=atomicAdd(control_data.c[1],1u);
+    if(slot<params.sizes.z) candidate_data.n[slot]=n;
+    else atomicOr(control_data.c[2],2u);
+}
+void main() {
+    uint idx=gl_GlobalInvocationID.x;
+#if STAGE==0
+    if(idx>=params.sizes.y) return;
+    uint seed=idx/12673u;
+    uint rem=idx-seed*12673u;
+    uint i43=rem/667u;
+    rem-=i43*667u;
+    uint i47=rem/29u;
+    uint i53=rem-i47*29u;
+    uvec2 n=residue_add(seed_data.n43[seed],seed_data.offsets[i43]);
+    n=residue_add(n,seed_data.offsets[19u+i47]);
+    n=residue_add(n,seed_data.offsets[42u+i53]);
+    n59_data.n[idx]=n;
+#elif STAGE==1
+    if(idx>=params.sizes.y) return;
+    uvec2 n=n59_data.n[idx];
+    uvec2 stride=params.values.xy;
+    uint a=n.x&0x3fffffffu;
+    uint b=(n.x>>30)|(n.y<<2);
+    uint sa=stride.x&0x3fffffffu;
+    uint sb=(stride.x>>30)|(stride.y<<2);
+    // First five entries of sieve_mask.glsl; advance each residue modulo p.
+    uint r61=(a+60u*b)%61u, d61=(sa+60u*sb)%61u;
+    uint r67=(a+25u*b)%67u, d67=(sa+25u*sb)%67u;
+    uint r71=(a+20u*b)%71u, d71=(sa+20u*sb)%71u;
+    uint r73=(a+8u*b)%73u, d73=(sa+8u*sb)%73u;
+    uint r79=(a+52u*b)%79u, d79=(sa+52u*sb)%79u;
+    for(uint iter=0u;iter<35u;iter++) {
+        uvec2 bits=mask_data.m[r61];
+        bits&=mask_data.m[61u+r67];
+        bits&=mask_data.m[128u+r71];
+        bits&=mask_data.m[199u+r73];
+        bits&=mask_data.m[272u+r79];
+        if((bits.x|bits.y)!=0u) {
+            a=n.x&0x3fffffffu;
+            b=(n.x>>30)|(n.y<<2);
+            bits=sieve_mask_tail(a,b,bits);
+        }
+        if((bits.x|bits.y)!=0u) {
+            uint slot=atomicAdd(control_data.c[0],1u);
+            if(slot<params.sizes.z) sieve_data.r[slot]=uvec4(n,bits);
+            else atomicOr(control_data.c[2],1u);
+        }
+        uvec2 sum=add64(n,stride);
+        bool wrapped=!lt64(sum,MOD);
+        n=wrapped ? sub64(sum,MOD) : sum;
+        // The last argument is MOD % p, removed only when n wraps modulo MOD.
+        r61=advance_residue(r61,d61,61u,43u,wrapped);
+        r67=advance_residue(r67,d67,67u,48u,wrapped);
+        r71=advance_residue(r71,d71,71u,33u,wrapped);
+        r73=advance_residue(r73,d73,73u,53u,wrapped);
+        r79=advance_residue(r79,d79,79u,21u,wrapped);
+    }
+#elif STAGE==2
+    if(idx!=0u) return;
+    control_data.c[4]=(min(control_data.c[0],params.sizes.z)+63u)/64u;
+    control_data.c[5]=1u; control_data.c[6]=1u;
+#elif STAGE==3
+    if(idx>=min(control_data.c[0],params.sizes.z)) return;
+    uvec4 record=sieve_data.r[idx];
+    uvec2 base=record.xy;
+    uint bits=record.z;
+    while(bits!=0u) {
+        uint bit=uint(findLSB(bits));
+        compact_bit(base,bit);
+        bits&=bits-1u;
+    }
+    bits=record.w;
+    while(bits!=0u) {
+        uint bit=32u+uint(findLSB(bits));
+        compact_bit(base,bit);
+        bits&=bits-1u;
+    }
+#elif STAGE==4
+    if(idx!=0u) return;
+    control_data.c[8]=(min(control_data.c[1],params.sizes.z)+63u)/64u;
+    control_data.c[9]=1u; control_data.c[10]=1u;
+#elif STAGE==5
+    if(idx>=min(control_data.c[1],params.sizes.z)) return;
+    uvec2 n=candidate_data.n[idx];
+    uvec2 step=params.values.zw;
+    uvec2 m=add64(n,mul64low(step,uvec2(5u,0u)));
+    if(lt64(m,n) || (m.x&1u)==0u) {
+        atomicOr(control_data.c[2],4u);
+        status_data.s[idx]=uvec4(0u);
+        return;
+    }
+    uint count=0u;
+    uint first_prp=0u;
+    while(true) {
+        uvec2 q=inverse64(m);
+        uvec2 one=one_mont(m);
+        if(!strong_prp(m,q,one)) break;
+        first_prp=1u;
+        count++;
+        uvec2 next=add64(m,step);
+        if(lt64(next,n)) { atomicOr(control_data.c[2],4u); break; }
+        m=next;
+    }
+    uvec2 first=uvec2(0u);
+    uint flags=first_prp;
+    if(count>=10u) {
+        m=add64(n,mul64low(step,uvec2(4u,0u)));
+        uvec2 start=m;
+        while(true) {
+            uvec2 q=inverse64(m);
+            uvec2 one=one_mont(m);
+            if(!strong_prp(m,q,one)) break;
+            m=sub64(m,step);
+            count++;
+            if(lt64(start,m)) break;
+        }
+        first=add64(m,step);
+        flags|=2u;
+        atomicAdd(control_data.c[3],1u);
+    }
+    status_data.s[idx]=uvec4(count,first,flags);
+#endif
+}

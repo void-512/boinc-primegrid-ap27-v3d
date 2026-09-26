@@ -1,0 +1,32 @@
+<app_info>
+  <app>
+    <name>ap26</name>
+    <user_friendly_name>AP27 Search</user_friendly_name>
+  </app>
+  <file><name>ap27_v3d</name><executable/></file>
+  <file><name>@BOINC_API_SONAME@</name></file>
+  <file><name>@BOINC_CORE_SONAME@</name></file>
+  <file><name>stage_0.spv</name></file>
+  <file><name>stage_1.spv</name></file>
+  <file><name>stage_2.spv</name></file>
+  <file><name>stage_3.spv</name></file>
+  <file><name>stage_4.spv</name></file>
+  <file><name>stage_5.spv</name></file>
+  <app_version>
+    <app_name>ap26</app_name>
+    <version_num>212</version_num>
+    <api_version>8.0.0</api_version>
+    <plan_class>cpu_AP27mt</plan_class>
+    <avg_ncpus>1</avg_ncpus>
+    <max_ncpus>1</max_ncpus>
+    <file_ref><file_name>ap27_v3d</file_name><main_program/></file_ref>
+    <file_ref><file_name>@BOINC_API_SONAME@</file_name><open_name>@BOINC_API_SONAME@</open_name></file_ref>
+    <file_ref><file_name>@BOINC_CORE_SONAME@</file_name><open_name>@BOINC_CORE_SONAME@</open_name></file_ref>
+    <file_ref><file_name>stage_0.spv</file_name><open_name>stage_0.spv</open_name></file_ref>
+    <file_ref><file_name>stage_1.spv</file_name><open_name>stage_1.spv</open_name></file_ref>
+    <file_ref><file_name>stage_2.spv</file_name><open_name>stage_2.spv</open_name></file_ref>
+    <file_ref><file_name>stage_3.spv</file_name><open_name>stage_3.spv</open_name></file_ref>
+    <file_ref><file_name>stage_4.spv</file_name><open_name>stage_4.spv</open_name></file_ref>
+    <file_ref><file_name>stage_5.spv</file_name><open_name>stage_5.spv</open_name></file_ref>
+  </app_version>
+</app_info>
