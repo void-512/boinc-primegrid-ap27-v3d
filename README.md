@@ -11,7 +11,6 @@ An AP27 search application for PrimeGrid's `ap26` BOINC work units. Its search a
 - `tests/`: exact V3D tile comparison against the CPU reference.
 - `tools/`: sieve-table generator and GPU utilisation helper.
 - `boinc/`: anonymous-platform `app_info.xml` template.
-- `docs/`: current project notes and the BOINC incident report.
 
 Historical experiments, downloaded source trees, prompts, reports, and old packages from development on this Pi are preserved in ignored `.local/`. They are not needed in a source checkout. The local BOINC client installation is separate from this repository.
 
@@ -34,8 +33,6 @@ ctest --test-dir build --output-on-failure
 ```
 
 The test requires direct access to the V3D device. Use a separate build directory with `-DCMAKE_BUILD_TYPE=Debug` for a Debug build. On a Pi with RAM-backed `~/.cache`, a build directory there avoids unnecessary storage writes.
-
-The current validation evidence and its limits are summarized in [docs/validation.md](docs/validation.md).
 
 The executable, six generated SPIR-V files, and required BOINC shared libraries are placed in `build/bin/`. The shader source and V3D workgroup tuning are in `shaders/`; production host code is in `src/`.
 
