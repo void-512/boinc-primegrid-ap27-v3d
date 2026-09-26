@@ -60,12 +60,27 @@ The current implementation keeps one Vulkan device, mapped buffers, descriptor s
 
 To acquire new task:
 ```bash
-sudo -u boinc boinccmd --project http://www.primegrid.com/ allowmorework
-sudo -u boinc boinccmd --project http://www.primegrid.com/ update
-sudo -u boinc boinccmd --get_tasks
+boinccmd --project http://www.primegrid.com/ allowmorework
+boinccmd --project http://www.primegrid.com/ update
+boinccmd --get_tasks
 ```
 
 To stop acquiring new task:
 ```bash
 boinccmd --project http://www.primegrid.com/ nomorework
+```
+
+To pause a running task:
+```bash
+boinccmd --task http://www.primegrid.com/ TASK_NAME suspend
+```
+
+To resume a paused task:
+```bash
+boinccmd --task http://www.primegrid.com/ TASK_NAME resume
+```
+
+To cancel a running task:
+```bash
+boinccmd --task http://www.primegrid.com/ TASK_NAME abort
 ```
