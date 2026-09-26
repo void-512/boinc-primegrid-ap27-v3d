@@ -2,7 +2,7 @@
 
 An AP27 search application for PrimeGrid's `ap26` BOINC work units. Its search and result format follow the AP26 application; the compute pipeline runs through Vulkan on Raspberry Pi 5 V3D 7.1. A CPU reference path is available with `AP27_BACKEND=cpu`.
 
-**Status:** the V3D tile pipeline matches the CPU reference on all 10 shifts of the `K=366384` test tile. The first real PrimeGrid work unit failed at BOINC startup after an application-file update while the client was running; see [the incident report](docs/boinc-file-size-incident.md). Full validator acceptance remains pending. See [LICENSE.md](LICENSE.md) before publishing or redistributing this derived code.
+**Status:** the paired-shift V3D tile pipeline matches the CPU reference on all 10 shifts of the `K=366384` test tile and on a partial tile with a nonzero starting shift. Full work-unit and validator acceptance remain pending. See [the BOINC application-file incident report](docs/boinc-file-size-incident.md) before installing an update, and [LICENSE.md](LICENSE.md) before publishing or redistributing this derived code.
 
 ## Project layout
 
@@ -44,7 +44,7 @@ Run from a writable work directory; the program writes `SOL-AP26.txt` and two `A
 /path/to/build/bin/ap27_v3d KMIN KMAX SHIFT
 ```
 
-For a short diagnostic that executes one tile without committing a result, set `AP27_DIAGNOSTIC_TILE_LIMIT=1`. That diagnostic exits with an error by design. The full search for one K is long.
+For a short diagnostic that executes one paired GPU tile without committing a result, set `AP27_DIAGNOSTIC_TILE_LIMIT=1`. That diagnostic exits with an error by design. The full search for one K is long.
 
 ## BOINC anonymous-platform package
 
@@ -54,7 +54,7 @@ cmake --build build --target package_boinc
 
 `build/boinc_package/` contains `ap27_v3d`, six shaders, the BOINC shared libraries selected at build time, and a generated `app_info.xml`. It also copies a BOINC copyright notice when one is available with the installed libraries. The template matches PrimeGrid `ap26` version 2.12 with plan class `cpu_AP27mt`; confirm that this matches the work units assigned to your client. **Stop the BOINC client completely before replacing any file in the project directory**, install the package with BOINC ownership and permissions, then restart the client and check its event log. Suspending a task is insufficient: BOINC checks application files against sizes recorded when it read `app_info.xml`. Never copy account keys, client state, task slots, or checkpoint files from another host. The package target only stages files; it does not alter a running BOINC installation.
 
-The current implementation keeps one Vulkan device, mapped buffers, descriptor set, six pipelines, command buffer, and fence for the application's lifetime. It uses a 512-lane V3D sieve workgroup and advances residues for the first six small primes. One submission and fence wait are used per tile so the existing checkpoint boundary remains clear.
+The current implementation keeps one Vulkan device, mapped buffers, descriptor set, six pipelines, command buffer, and fence for the application's lifetime. It uses a 512-lane V3D sieve workgroup and advances residues for the first six small primes. Two adjacent shifts share `n59` generation, residue evolution, and one mask table; compaction and probable-prime checks remain on the GPU. One submission and fence wait are used per paired tile. Checkpoints keep the same format: an interrupted K is replayed, with that K's partial results rolled back.
 
 ## Useful BOINC commands
 

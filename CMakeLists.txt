@@ -47,7 +47,7 @@ foreach(stage RANGE 0 5)
         COMMAND "${GLSLC_EXECUTABLE}" -O "-I${AP27_SHADER_DIR}"
             "-DSTAGE=${stage}" -fshader-stage=comp -o "${output}" "${AP27_SHADER_DIR}/tile.comp"
         DEPENDS "${AP27_SHADER_DIR}/tile.comp" "${AP27_SHADER_DIR}/sieve_mask.glsl"
-            "${AP27_SHADER_DIR}/sieve_mask_tail.glsl" "${AP27_SHADER_DIR}/ap27_math.glsl"
+            "${AP27_SHADER_DIR}/sieve_mask_pair_tail.glsl" "${AP27_SHADER_DIR}/ap27_math.glsl"
         VERBATIM)
     list(APPEND AP27_SHADER_OUTPUTS "${output}")
 endforeach()
@@ -104,8 +104,12 @@ if(BUILD_TESTING)
     target_link_libraries(ap27_tile_test PRIVATE Vulkan::Vulkan)
     target_include_directories(ap27_tile_test PRIVATE "${PROJECT_SOURCE_DIR}/include")
     add_dependencies(ap27_tile_test ap27_shaders)
-    add_test(NAME ap27_tile_exact COMMAND "$<TARGET_FILE:ap27_tile_test>" 10)
+    add_test(NAME ap27_tile_exact COMMAND "$<TARGET_FILE:ap27_tile_test>" 5)
+    add_test(NAME ap27_partial_tile_exact COMMAND "$<TARGET_FILE:ap27_tile_test>" 1 8 366385 64)
     set_tests_properties(ap27_tile_exact PROPERTIES
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+        ENVIRONMENT "AP27_SHADER_DIR=${AP27_BIN_DIR}")
+    set_tests_properties(ap27_partial_tile_exact PROPERTIES
         WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
         ENVIRONMENT "AP27_SHADER_DIR=${AP27_BIN_DIR}")
 endif()

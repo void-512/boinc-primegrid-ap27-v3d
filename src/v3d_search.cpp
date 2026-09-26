@@ -22,6 +22,7 @@ static constexpr uint64_t MOD=258559632607830ULL;
 static constexpr uint64_t PRIM23=223092870ULL;
 static constexpr uint32_t SEEDS=32, PER_SEED=12673;
 static constexpr uint32_t N59_COUNT=SEEDS*PER_SEED, CAP=1000000;
+static_assert(MOD < (1ULL<<48)); // Sieve record bit 48 tags the second shift.
 static constexpr uint64_t N0=106990415896110ULL, N30=94805198622871ULL;
 static constexpr uint64_t S3=172373088405220ULL, S5=51711926521566ULL;
 static constexpr uint64_t PRES2=16681266619860ULL, PRES3=181690552643340ULL;
@@ -249,10 +250,11 @@ struct V3D {
         for(auto& x:b)if(x.b)destroy(dev,x);
         if(dev)vkDestroyDevice(dev,nullptr);if(instance)vkDestroyInstance(instance,nullptr);
     }
-    void prepare_shift(uint64_t step,uint32_t shift){
+    void prepare_pair(uint64_t step,uint32_t shift){
+        // The shader rotates each prime's row by 64*MOD mod p for shift+64.
         fill_masks(std::span<U2,mask_count>(static_cast<U2*>(b[2].ptr),mask_count),step,shift);
     }
-    void tile(uint32_t K,const SeedData& seeds,uint32_t count,uint32_t shift,std::vector<APHit>& hits){
+    void tile_pair(uint32_t K,const SeedData& seeds,uint32_t count,uint32_t shift,std::vector<APHit>& hits){
         std::memcpy(b[0].ptr,&seeds,sizeof(seeds));
         uint64_t step=uint64_t(K)*PRIM23;
         std::memset(b[6].ptr,0,b[6].size);
@@ -305,12 +307,15 @@ std::vector<APHit> search_ap27_k(unsigned K,unsigned start_shift,const uint64_t*
     uint32_t completed=0;
     const char* diagnostic_limit=std::getenv("AP27_DIAGNOSTIC_TILE_LIMIT");
     uint32_t max_tiles=diagnostic_limit?uint32_t(std::strtoul(diagnostic_limit,nullptr,10)):0;
-    for(uint32_t shift=start_shift;shift<start_shift+640;shift+=64){
+    // Restarts replay an interrupted K, so pairing does not change checkpoints.
+    const uint32_t shifts_per_tile=cpu_backend?1u:2u;
+    uint32_t dispatched_tiles=0;
+    for(uint32_t shift=start_shift;shift<start_shift+640;shift+=64*shifts_per_tile){
         std::vector<U2> cpu_masks;
         if(cpu_backend){
             cpu_masks.resize(mask_count);
             fill_masks(std::span<U2,mask_count>(cpu_masks.data(),mask_count),step,shift);
-        }else active_v3d->prepare_shift(step,shift);
+        }else active_v3d->prepare_pair(step,shift);
         for(uint32_t base=0;base<10840;base+=SEEDS){
             uint32_t count=std::min(SEEDS,10840u-base);
             fill_seed_tile(seeds,n43,base,count);
@@ -318,12 +323,13 @@ std::vector<APHit> search_ap27_k(unsigned K,unsigned start_shift,const uint64_t*
                 auto n59=generate_cpu(seeds,K,count);
                 auto records=sieve_cpu(n59,cpu_masks,s59);auto candidates=compact_cpu(records,shift);
                 for(auto n:candidates){auto o=check_candidate(n,step);if(o.flags&2u)hits.push_back({o.count,o.first});}
-            }else active_v3d->tile(K,seeds,count,shift,hits);
-            completed++;
+            }else active_v3d->tile_pair(K,seeds,count,shift,hits);
+            completed+=shifts_per_tile;
             tile_done(double(completed)/double(10*tiles_per_shift));
-            if(max_tiles && completed>=max_tiles)throw std::runtime_error("diagnostic tile limit reached; no result committed");
+            if(max_tiles && ++dispatched_tiles>=max_tiles)throw std::runtime_error("diagnostic tile limit reached; no result committed");
         }
-        std::fprintf(stderr,"K=%u shift=%u AP10+ hits=%zu\n",K,shift,hits.size());
+        if(cpu_backend)std::fprintf(stderr,"K=%u shift=%u AP10+ hits=%zu\n",K,shift,hits.size());
+        else std::fprintf(stderr,"K=%u shifts=%u,%u AP10+ hits=%zu\n",K,shift,shift+64,hits.size());
     }
     std::sort(hits.begin(),hits.end(),[](const APHit& a,const APHit& b){
         return a.first<b.first || (a.first==b.first && a.length<b.length);

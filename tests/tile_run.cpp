@@ -16,7 +16,8 @@
 
 static constexpr uint64_t MOD=258559632607830ULL;
 static constexpr uint64_t PRIM23=223092870ULL;
-static constexpr uint32_t K=366384, SEEDS=32, PER_SEED=12673;
+static uint32_t test_k=366384;
+static constexpr uint32_t SEEDS=32, PER_SEED=12673;
 static constexpr uint32_t N59_COUNT=SEEDS*PER_SEED, CAP=1000000;
 static constexpr uint64_t N0=106990415896110ULL, N30=94805198622871ULL;
 static constexpr uint64_t S3=172373088405220ULL, S5=51711926521566ULL;
@@ -36,7 +37,7 @@ struct SeedData { U2 seeds[32]; U2 offsets[71]; };
 struct Push { uint32_t s59lo,s59hi,steplo,stephi,shift,count,cap,reserved; };
 struct SieveRec { uint64_t n, mask; bool operator<(const SieveRec& b) const {return std::tie(n,mask)<std::tie(b.n,b.mask);} bool operator==(const SieveRec& b) const {return n==b.n&&mask==b.mask;} };
 struct Outcome { uint64_t n,first; uint32_t count,flags; bool operator<(const Outcome& b) const {return std::tie(n,count,first,flags)<std::tie(b.n,b.count,b.first,b.flags);} bool operator==(const Outcome& b) const {return n==b.n&&count==b.count&&first==b.first&&flags==b.flags;} };
-uint64_t residue(uint64_t pres) { return (pres*(K%17835)+((pres*17835)%MOD)*(K/17835))%MOD; }
+uint64_t residue(uint64_t pres) { return (pres*(test_k%17835)+((pres*17835)%MOD)*(test_k/17835))%MOD; }
 uint64_t mulmod(uint64_t a,uint64_t b,uint64_t n){return uint64_t((__uint128_t(a)*b)%n);}
 uint64_t powmod(uint64_t a,uint64_t e,uint64_t n){uint64_t r=1%n;for(;e;e>>=1,a=mulmod(a,a,n))if(e&1)r=mulmod(r,a,n);return r;}
 bool strong_prp_cpu(uint64_t n){
@@ -62,7 +63,7 @@ Outcome check_candidate(uint64_t n,uint64_t step){
     return {n,first,k,flags};
 }
 SeedData make_seeds(){
-    SeedData d{}; uint64_t n0=(N0*(K%17835)+((N0*17835)%MOD)*(K/17835)+N30)%MOD;
+    SeedData d{}; uint64_t n0=(N0*(test_k%17835)+((N0*17835)%MOD)*(test_k/17835)+N30)%MOD;
     uint64_t s31=residue(PRES2),s37=residue(PRES3),s41=residue(PRES4);
     uint64_t s43=residue(PRES5),s47=residue(PRES6),s53=residue(PRES7);
     uint32_t count=0;
@@ -80,11 +81,11 @@ SeedData make_seeds(){
     for(uint32_t i=0;i<29;i++)d.offsets[42+i]=split((i*s53)%MOD);
     return d;
 }
-std::vector<uint64_t> generate_cpu(const SeedData& seeds){
-    std::vector<uint64_t> n(N59_COUNT);
+std::vector<uint64_t> generate_cpu(const SeedData& seeds,uint32_t seed_count){
+    std::vector<uint64_t> n(seed_count*PER_SEED);
     const uint64_t s43=residue(PRES5),s47=residue(PRES6),s53=residue(PRES7);
     uint32_t idx=0;
-    for(uint32_t seed=0;seed<SEEDS;seed++){
+    for(uint32_t seed=0;seed<seed_count;seed++){
         uint64_t n43=pack(seeds.seeds[seed].lo,seeds.seeds[seed].hi);
         for(uint32_t i43=0;i43<19;i43++){
             uint64_t n47=n43;
@@ -99,7 +100,7 @@ std::vector<uint64_t> generate_cpu(const SeedData& seeds){
             n43+=s43;if(n43>=MOD)n43-=MOD;
         }
     }
-    if(idx!=N59_COUNT)throw std::runtime_error("CPU setupn count mismatch");
+    if(idx!=seed_count*PER_SEED)throw std::runtime_error("CPU setupn count mismatch");
     return n;
 }
 std::vector<U2> make_masks(uint64_t step,uint32_t shift){
@@ -176,13 +177,18 @@ void destroy(VkDevice dev,Buffer& b){vkUnmapMemory(dev,b.m);vkDestroyBuffer(dev,
 
 int main(int argc,char** argv){
 try {
-    uint32_t shifts=argc>1 ? uint32_t(std::strtoul(argv[1],nullptr,10)) : 1;
-    if(shifts!=1&&shifts!=10)throw std::runtime_error("usage: tile_run [1|10]");
+    uint32_t pairs=argc>1 ? uint32_t(std::strtoul(argv[1],nullptr,10)) : 1;
+    uint32_t seed_count=argc>2 ? uint32_t(std::strtoul(argv[2],nullptr,10)) : SEEDS;
+    if(argc>3)test_k=uint32_t(std::strtoul(argv[3],nullptr,10));
+    uint32_t start_shift=argc>4 ? uint32_t(std::strtoul(argv[4],nullptr,10)) : 0;
+    if((pairs!=1&&pairs!=5)||seed_count<1||seed_count>SEEDS||test_k<1||start_shift>1000000u)
+        throw std::runtime_error("usage: tile_run [1|5 pairs] [1..32 seeds] [K] [start_shift]");
+    uint32_t n59_count=seed_count*PER_SEED;
     uint32_t sieve_workgroup=std::getenv("AP27_SIEVE_WORKGROUP") ? uint32_t(std::strtoul(std::getenv("AP27_SIEVE_WORKGROUP"),nullptr,10)) : 512;
     if(sieve_workgroup!=256&&sieve_workgroup!=512&&sieve_workgroup!=1024)throw std::runtime_error("invalid AP27_SIEVE_WORKGROUP");
     auto wall0=std::chrono::steady_clock::now();uint64_t cpu0=process_ns();
-    const uint64_t step=uint64_t(K)*PRIM23,s59=residue(PRES8);
-    SeedData seeds=make_seeds(); auto expected_n59=generate_cpu(seeds);
+    const uint64_t step=uint64_t(test_k)*PRIM23,s59=residue(PRES8);
+    SeedData seeds=make_seeds(); auto expected_n59=generate_cpu(seeds,seed_count);
     VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};app.apiVersion=VK_API_VERSION_1_2;app.pApplicationName="AP27 exact tile";
     VkInstanceCreateInfo ic{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};ic.pApplicationInfo=&app;
     VkInstance instance;check(vkCreateInstance(&ic,nullptr,&instance),"instance");
@@ -206,18 +212,12 @@ try {
     std::array<Buffer,7> b={
         make_buffer(dev,gpu,sizeof(SeedData),0),
         make_buffer(dev,gpu,sizeof(U2)*N59_COUNT,0),
-        make_buffer(dev,gpu,sizeof(U2)*(mask_count+2*(small_primes.size()-5)),0),
+        make_buffer(dev,gpu,sizeof(U2)*mask_count,0),
         make_buffer(dev,gpu,sizeof(U4)*CAP,0),
         make_buffer(dev,gpu,sizeof(U2)*CAP,0),
         make_buffer(dev,gpu,sizeof(U4)*CAP,0),
         make_buffer(dev,gpu,64,VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT)};
     std::memcpy(b[0].ptr,&seeds,sizeof(seeds));
-    U2* mask_words=static_cast<U2*>(b[2].ptr);
-    for(size_t i=5;i<small_primes.size();i++){
-        const auto& p=small_primes[i];
-        mask_words[mask_count+2*(i-5)]={p.p,p.coeff};
-        mask_words[mask_count+2*(i-5)+1]={p.offset,uint32_t((uint64_t(1)<<32)/p.p)};
-    }
     VkDescriptorSetLayoutBinding lb[7]{};for(uint32_t i=0;i<7;i++){lb[i].binding=i;lb[i].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;lb[i].descriptorCount=1;lb[i].stageFlags=VK_SHADER_STAGE_COMPUTE_BIT;}
     VkDescriptorSetLayoutCreateInfo lc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};lc.bindingCount=7;lc.pBindings=lb;
     VkDescriptorSetLayout dsl;check(vkCreateDescriptorSetLayout(dev,&lc,nullptr,&dsl),"descriptor layout");
@@ -283,19 +283,30 @@ try {
     VkCommandBufferAllocateInfo ca{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};ca.commandPool=command_pool;ca.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY;ca.commandBufferCount=1;
     VkCommandBuffer cb;check(vkAllocateCommandBuffers(dev,&ca,&cb),"command buffer");
     VkFenceCreateInfo fc{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};VkFence fence;check(vkCreateFence(dev,&fc,nullptr,&fence),"fence");
-    std::printf("device=%s driver=%u.%u.%u n59=%u capacity=%u shifts=%u\n",props.deviceName,VK_VERSION_MAJOR(props.driverVersion),VK_VERSION_MINOR(props.driverVersion),VK_VERSION_PATCH(props.driverVersion),N59_COUNT,CAP,shifts);
-    double total_gpu_ms=0,total_gpu_window_cpu_ms=0,total_gpu_window_wall_ms=0,total_ref_ms=0;
-    for(uint32_t shift_i=0;shift_i<shifts;shift_i++){
-        uint32_t shift=64*shift_i;
+    std::printf("device=%s driver=%u.%u.%u K=%u n59=%u capacity=%u pairs=%u shifts=%u start_shift=%u\n",props.deviceName,VK_VERSION_MAJOR(props.driverVersion),VK_VERSION_MINOR(props.driverVersion),VK_VERSION_PATCH(props.driverVersion),test_k,n59_count,CAP,pairs,2*pairs,start_shift);
+    double total_gpu_ms=0,total_gpu_window_cpu_ms=0,total_gpu_window_wall_ms=0,total_ref_ms=0,total_host_cpu_ms=0,total_host_wall_ms=0,total_mask_cpu_ms=0;
+    for(uint32_t shift_i=0;shift_i<pairs;shift_i++){
+        uint32_t shift=start_shift+128*shift_i;
         auto ref_start=std::chrono::steady_clock::now();
+        uint64_t mask_cpu_start=process_ns();
         auto masks=make_masks(step,shift);std::memcpy(b[2].ptr,masks.data(),sizeof(U2)*mask_count);
+        double mask_cpu_ms=double(process_ns()-mask_cpu_start)/1e6;
+        auto masks2=make_masks(step,shift+64);
+        total_mask_cpu_ms+=mask_cpu_ms;
         auto sieve_ref=sieve_cpu(expected_n59,masks,s59);
+        auto sieve_ref2=sieve_cpu(expected_n59,masks2,s59);
         auto cand_ref=compact_cpu(sieve_ref,shift);
+        auto cand_ref2=compact_cpu(sieve_ref2,shift+64);
         std::vector<Outcome> outcome_ref;outcome_ref.reserve(cand_ref.size());
         for(uint64_t n:cand_ref)outcome_ref.push_back(check_candidate(n,step));
+        for(uint64_t n:cand_ref2)outcome_ref.push_back(check_candidate(n,step));
+        for(auto& record:sieve_ref2)record.n|=1ULL<<48;
+        sieve_ref.insert(sieve_ref.end(),sieve_ref2.begin(),sieve_ref2.end());
+        cand_ref.insert(cand_ref.end(),cand_ref2.begin(),cand_ref2.end());
         total_ref_ms+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-ref_start).count();
+        auto host_wall_start=std::chrono::steady_clock::now();uint64_t host_cpu_start=process_ns();
         std::memset(b[6].ptr,0,b[6].size);
-        Push push{uint32_t(s59),uint32_t(s59>>32),uint32_t(step),uint32_t(step>>32),shift,N59_COUNT,CAP,0};
+        Push push{uint32_t(s59),uint32_t(s59>>32),uint32_t(step),uint32_t(step>>32),shift,n59_count,CAP,0};
         check(vkResetCommandBuffer(cb,0),"reset command buffer");
         VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};check(vkBeginCommandBuffer(cb,&begin),"begin command buffer");
         vkCmdResetQueryPool(cb,qp,0,12);
@@ -306,8 +317,8 @@ try {
             vkCmdWriteTimestamp(cb,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,qp,2*stage);
             if(profile&&stage==1)vkCmdBeginQuery(cb,perf_qp,0,0);
             vkCmdBindPipeline(cb,VK_PIPELINE_BIND_POINT_COMPUTE,pipelines[stage]);
-            if(stage==0)vkCmdDispatch(cb,(N59_COUNT+63)/64,1,1);
-            else if(stage==1)vkCmdDispatch(cb,(N59_COUNT+sieve_workgroup-1)/sieve_workgroup,1,1);
+            if(stage==0)vkCmdDispatch(cb,(n59_count+63)/64,1,1);
+            else if(stage==1)vkCmdDispatch(cb,(n59_count+sieve_workgroup-1)/sieve_workgroup,1,1);
             else if(stage==2||stage==4)vkCmdDispatch(cb,1,1,1);
             else vkCmdDispatchIndirect(cb,b[6].b,(stage==3?4:8)*sizeof(uint32_t));
             VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};barrier.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT;
@@ -326,6 +337,12 @@ try {
         check(vkWaitForFences(dev,1,&fence,VK_TRUE,300000000000ULL),"wait tile fence");
         double window_cpu_ms=double(process_ns()-gcpu)/1e6;
         double window_wall_ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-gwall).count();
+        const uint32_t* host_control=static_cast<const uint32_t*>(b[6].ptr);
+        const U4* host_status=static_cast<const U4*>(b[5].ptr);
+        uint32_t host_hits=0;for(uint32_t i=0;i<host_control[1];i++)if(host_status[i].w&2u)host_hits++;
+        double host_cpu_ms=double(process_ns()-host_cpu_start)/1e6;
+        double host_wall_ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-host_wall_start).count();
+        total_host_cpu_ms+=host_cpu_ms;total_host_wall_ms+=host_wall_ms;
         total_gpu_window_cpu_ms+=window_cpu_ms;total_gpu_window_wall_ms+=window_wall_ms;
         uint64_t ticks[12]{};check(vkGetQueryPoolResults(dev,qp,0,12,sizeof(ticks),ticks,sizeof(uint64_t),VK_QUERY_RESULT_64_BIT|VK_QUERY_RESULT_WAIT_BIT),"get timestamps");
         double gpu_stage[6]{};double gpu_ms=0;
@@ -342,11 +359,11 @@ try {
         }
         const uint32_t* control=static_cast<const uint32_t*>(b[6].ptr);
         uint32_t nr=control[0],nc=control[1],overflow=control[2],hits=control[3];
-        std::printf("shift=%u gpu_ms setup=%.3f sieve=%.3f prep_compact=%.3f compact=%.3f prep_check=%.3f check=%.3f sum=%.3f inter_stage=%.3f span=%.3f wall_ms=%.3f process_cpu_ms=%.3f records=%u candidates=%u hits=%u overflow=%u ref_records=%zu ref_candidates=%zu\n",
-                    shift,gpu_stage[0],gpu_stage[1],gpu_stage[2],gpu_stage[3],gpu_stage[4],gpu_stage[5],gpu_ms,inter_stage_ms,double(ticks[11]-ticks[0])*props.limits.timestampPeriod/1e6,window_wall_ms,window_cpu_ms,nr,nc,hits,overflow,sieve_ref.size(),cand_ref.size());
+        std::printf("shift=%u gpu_ms setup=%.3f sieve=%.3f prep_compact=%.3f compact=%.3f prep_check=%.3f check=%.3f sum=%.3f inter_stage=%.3f span=%.3f wall_ms=%.3f process_cpu_ms=%.3f host_cpu_ms=%.3f host_wall_ms=%.3f mask_cpu_ms=%.3f host_hits=%u records=%u candidates=%u hits=%u overflow=%u ref_records=%zu ref_candidates=%zu\n",
+                    shift,gpu_stage[0],gpu_stage[1],gpu_stage[2],gpu_stage[3],gpu_stage[4],gpu_stage[5],gpu_ms,inter_stage_ms,double(ticks[11]-ticks[0])*props.limits.timestampPeriod/1e6,window_wall_ms,window_cpu_ms,host_cpu_ms,host_wall_ms,mask_cpu_ms,host_hits,nr,nc,hits,overflow,sieve_ref.size(),cand_ref.size());
         if(overflow)throw std::runtime_error("bounded output overflow; retry with larger capacity or smaller tile");
         const U2* actual_n59=static_cast<const U2*>(b[1].ptr);
-        for(uint32_t i=0;i<N59_COUNT;i++)if(pack(actual_n59[i].lo,actual_n59[i].hi)!=expected_n59[i]){
+        for(uint32_t i=0;i<n59_count;i++)if(pack(actual_n59[i].lo,actual_n59[i].hi)!=expected_n59[i]){
             std::fprintf(stderr,"n59 mismatch shift=%u idx=%u expected=%llu actual=%llu\n",shift,i,(unsigned long long)expected_n59[i],(unsigned long long)pack(actual_n59[i].lo,actual_n59[i].hi));
             throw std::runtime_error("GPU setupn differs from CPU");
         }
@@ -381,11 +398,11 @@ try {
         if(hits!=expected_hits)throw std::runtime_error("AP hit count mismatch");
         for(const auto& o:outcome_ref)if(o.flags&2)
             std::printf("AP_HIT shift=%u length=%u first=%llu candidate=%llu\n",shift,o.count,(unsigned long long)o.first,(unsigned long long)o.n);
-        std::printf("shift=%u PASS n59=%u sieve_records=%u compacted=%u PRP=%u AP_hits=%u\n",shift,N59_COUNT,nr,nc,nc,hits);
+        std::printf("shift=%u PASS n59=%u sieve_records=%u compacted=%u PRP=%u AP_hits=%u\n",shift,n59_count,nr,nc,nc,hits);
         std::fflush(stdout);
     }
     auto wall1=std::chrono::steady_clock::now();double total_wall_ms=std::chrono::duration<double,std::milli>(wall1-wall0).count();double total_cpu_ms=double(process_ns()-cpu0)/1e6;
-    std::printf("TOTAL shifts=%u gpu_stage_sum_ms=%.3f submit_wait_wall_ms=%.3f submit_wait_process_cpu_ms=%.3f cpu_reference_ms=%.3f process_wall_ms=%.3f process_cpu_ms=%.3f submissions=%u fence_waits=%u mapped_readbacks=%u\n",shifts,total_gpu_ms,total_gpu_window_wall_ms,total_gpu_window_cpu_ms,total_ref_ms,total_wall_ms,total_cpu_ms,shifts,shifts,5*shifts);
+    std::printf("TOTAL pairs=%u shifts=%u gpu_stage_sum_ms=%.3f submit_wait_wall_ms=%.3f submit_wait_process_cpu_ms=%.3f host_cpu_ms=%.3f host_wall_ms=%.3f mask_cpu_ms=%.3f cpu_reference_ms=%.3f process_wall_ms=%.3f process_cpu_ms=%.3f submissions=%u fence_waits=%u mapped_readbacks=%u\n",pairs,2*pairs,total_gpu_ms,total_gpu_window_wall_ms,total_gpu_window_cpu_ms,total_host_cpu_ms,total_host_wall_ms,total_mask_cpu_ms,total_ref_ms,total_wall_ms,total_cpu_ms,pairs,pairs,5*pairs);
     vkDestroyFence(dev,fence,nullptr);vkDestroyCommandPool(dev,command_pool,nullptr);vkDestroyQueryPool(dev,qp,nullptr);
     if(profile){auto release=reinterpret_cast<PFN_vkReleaseProfilingLockKHR>(vkGetDeviceProcAddr(dev,"vkReleaseProfilingLockKHR"));release(dev);vkDestroyQueryPool(dev,perf_qp,nullptr);}
     for(int i=0;i<6;i++){vkDestroyPipeline(dev,pipelines[i],nullptr);vkDestroyShaderModule(dev,modules[i],nullptr);}
