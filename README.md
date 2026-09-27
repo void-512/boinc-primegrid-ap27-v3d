@@ -1,8 +1,8 @@
 # AP27 on Raspberry Pi 5 V3D
 
-An AP27 search application for PrimeGrid's `ap26` BOINC work units. Its search and result format follow the AP26 application; the compute pipeline runs through Vulkan on Raspberry Pi 5 V3D 7.1. A CPU reference path is available with `AP27_BACKEND=cpu`.
+This is a pure vibe coding project under the help of `Codex`
 
-**Status:** the paired-shift V3D tile pipeline matches the CPU reference on all 10 shifts of the `K=366384` test tile and on a partial tile with a nonzero starting shift. Full work-unit and validator acceptance remain pending. See [the BOINC application-file incident report](docs/boinc-file-size-incident.md) before installing an update, and [LICENSE.md](LICENSE.md) before publishing or redistributing this derived code.
+An AP27 search application for PrimeGrid's `ap26` BOINC work units. Its search and result format follow the AP26 application; the compute pipeline runs through Vulkan on Raspberry Pi 5 V3D 7.1. A CPU reference path is available with `AP27_BACKEND=cpu`.
 
 ## Project layout
 
@@ -12,27 +12,19 @@ An AP27 search application for PrimeGrid's `ap26` BOINC work units. Its search a
 - `tools/`: sieve-table generator and GPU utilisation helper.
 - `boinc/`: anonymous-platform `app_info.xml` template.
 
-Historical experiments, downloaded source trees, prompts, reports, and old packages from development on this Pi are preserved in ignored `.local/`. They are not needed in a source checkout. The local BOINC client installation is separate from this repository.
-
-The generated sieve tables are checked in. To regenerate them, run `python3 tools/gen_sieve.py --upstream-sieve /path/to/ap27/opencl/kernels/sieve.cl` with the upstream AP27 source; the local archive supplies that input by default on this Pi.
-
 ## Requirements
 
 - Raspberry Pi 5 with working Mesa V3DV Vulkan compute support (Vulkan 1.2 or newer).
-- CMake 3.31 or newer and a C++26 compiler (tested with GCC 14).
+- CMake 3.31 or newer and a C++26 compiler (tested with GCC 14 and Clang-22).
 - Vulkan headers/loader and `glslc`.
-- BOINC application development headers and **shared** `libboinc_api` and `libboinc`. Set `-DBOINC_ROOT=/path/to/usr` if CMake cannot find them. A local extracted BOINC package under `.local/sources/boinc-packages/root/usr` is recognized for development, but is not part of the source release.
+- BOINC application development headers and **shared** `libboinc_api` and `libboinc`. Set `-DBOINC_ROOT=/path/to/usr` if CMake cannot find them.
 
-## Build and test
+## Build
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
-cmake --build build --target ap27_tile_test -j
-ctest --test-dir build --output-on-failure
 ```
-
-The test requires direct access to the V3D device. Use a separate build directory with `-DCMAKE_BUILD_TYPE=Debug` for a Debug build. On a Pi with RAM-backed `~/.cache`, a build directory there avoids unnecessary storage writes.
 
 The executable, six generated SPIR-V files, and required BOINC shared libraries are placed in `build/bin/`. The shader source and V3D workgroup tuning are in `shaders/`; production host code is in `src/`.
 
@@ -50,9 +42,12 @@ For a short diagnostic that executes one paired GPU tile without committing a re
 
 ```bash
 cmake --build build --target package_boinc
+sudo cp build/boinc_package/* /var/lib/boinc-client/projects/www.primegrid.com/
 ```
 
-`build/boinc_package/` contains `ap27_v3d`, six shaders, the BOINC shared libraries selected at build time, and a generated `app_info.xml`. It also copies a BOINC copyright notice when one is available with the installed libraries. The template matches PrimeGrid `ap26` version 2.12 with plan class `cpu_AP27mt`; confirm that this matches the work units assigned to your client. **Stop the BOINC client completely before replacing any file in the project directory**, install the package with BOINC ownership and permissions, then restart the client and check its event log. Suspending a task is insufficient: BOINC checks application files against sizes recorded when it read `app_info.xml`. Never copy account keys, client state, task slots, or checkpoint files from another host. The package target only stages files; it does not alter a running BOINC installation.
+`build/boinc_package/` contains `ap27_v3d`, six shaders, the BOINC shared libraries selected at build time, and a generated `app_info.xml`. It also copies a BOINC copyright notice when one is available with the installed libraries. The template matches PrimeGrid `ap26` version 2.12 with plan class `cpu_AP27mt`; confirm that this matches the work units assigned to your client. **Stop the BOINC client completely before replacing any file in the project directory**, install the package with BOINC ownership and permissions, then restart the client and check its event log. Suspending a task is insufficient: BOINC checks application files against sizes recorded when it read `app_info.xml`.
+
+To accept new tasks from BOINC, you need to copy all the files under `build/boinc_package/` to  `/var/lib/boinc-client/projects/www.primegrid.com`, which is the default path for primegrid.
 
 The current implementation keeps one Vulkan device, mapped buffers, descriptor set, six pipelines, command buffer, and fence for the application's lifetime. It uses a 512-lane V3D sieve workgroup and advances residues for the first six small primes. Two adjacent shifts share `n59` generation, residue evolution, and one mask table; compaction and probable-prime checks remain on the GPU. One submission and fence wait are used per paired tile. Checkpoints keep the same format: an interrupted K is replayed, with that K's partial results rolled back.
 
@@ -62,6 +57,10 @@ To acquire new task:
 ```bash
 boinccmd --project http://www.primegrid.com/ allowmorework
 boinccmd --project http://www.primegrid.com/ update
+```
+
+To check current task status:
+```bash
 boinccmd --get_tasks
 ```
 
