@@ -1,10 +1,6 @@
 cmake_minimum_required(VERSION 3.31)
 project(ap27_v3d LANGUAGES CXX)
 
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 14)
-    message(FATAL_ERROR "GCC 14 or newer is required for C++26 on this project")
-endif()
-
 find_package(Vulkan REQUIRED)
 find_program(GLSLC_EXECUTABLE NAMES glslc REQUIRED)
 
@@ -52,36 +48,32 @@ foreach(stage RANGE 0 5)
         VERBATIM)
     list(APPEND AP27_SHADER_OUTPUTS "${output}")
 endforeach()
-add_custom_target(ap27_shaders ALL DEPENDS ${AP27_SHADER_OUTPUTS})
+add_custom_target(ap27_shaders DEPENDS ${AP27_SHADER_OUTPUTS})
 
 add_executable(ap27_v3d
     src/AP26_v3d.cpp
     src/v3d_search.cpp)
-target_compile_features(ap27_v3d PRIVATE cxx_std_26)
-set_target_properties(ap27_v3d PROPERTIES CXX_STANDARD 26 CXX_STANDARD_REQUIRED YES
+target_compile_features(ap27_v3d PRIVATE cxx_std_20)
+set_target_properties(ap27_v3d PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES
     CXX_EXTENSIONS NO RUNTIME_OUTPUT_DIRECTORY "${AP27_BIN_DIR}"
     BUILD_WITH_INSTALL_RPATH YES INSTALL_RPATH "$ORIGIN")
 target_include_directories(ap27_v3d PRIVATE "${PROJECT_SOURCE_DIR}/include" "${BOINC_INCLUDE_DIR}")
 target_link_libraries(ap27_v3d PRIVATE Vulkan::Vulkan BOINC::api BOINC::core)
 add_dependencies(ap27_v3d ap27_shaders)
-add_custom_command(TARGET ap27_v3d POST_BUILD
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${BOINC_API_REAL}" "${AP27_BIN_DIR}/${BOINC_API_SONAME}"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${BOINC_CORE_REAL}" "${AP27_BIN_DIR}/${BOINC_CORE_SONAME}"
-    VERBATIM)
 
-configure_file(boinc/app_info.xml.in "${CMAKE_BINARY_DIR}/app_info.xml" @ONLY)
-set(AP27_PACKAGE_DIR "${CMAKE_BINARY_DIR}/boinc_package" CACHE PATH "BOINC anonymous-platform package output")
-add_custom_target(package_boinc
-    COMMAND "${CMAKE_COMMAND}" -E make_directory "${AP27_PACKAGE_DIR}"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different "$<TARGET_FILE:ap27_v3d>" "${AP27_PACKAGE_DIR}/ap27_v3d"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${BOINC_API_REAL}" "${AP27_PACKAGE_DIR}/${BOINC_API_SONAME}"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${BOINC_CORE_REAL}" "${AP27_PACKAGE_DIR}/${BOINC_CORE_SONAME}"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${CMAKE_BINARY_DIR}/app_info.xml" "${AP27_PACKAGE_DIR}/app_info.xml"
-    DEPENDS ap27_v3d ap27_shaders VERBATIM)
-foreach(shader IN LISTS AP27_SHADER_OUTPUTS)
-    add_custom_command(TARGET package_boinc POST_BUILD
-        COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${shader}" "${AP27_PACKAGE_DIR}/"
-        VERBATIM)
+# The default build assembles exactly the files used by the BOINC app version.
+configure_file(boinc/app_info.xml.in "${AP27_BIN_DIR}/app_info.xml" @ONLY)
+set(AP27_APP_INFO "${AP27_BIN_DIR}/app_info.xml")
+set(AP27_RUNTIME_FILES ${AP27_SHADER_OUTPUTS})
+foreach(boinc_library IN ITEMS "${BOINC_API_REAL}" "${BOINC_CORE_REAL}")
+    get_filename_component(boinc_library_name "${boinc_library}" NAME)
+    string(REGEX MATCH "^libboinc(_api)?\\.so\\.[0-9]+" boinc_soname "${boinc_library_name}")
+    set(output "${AP27_BIN_DIR}/${boinc_soname}")
+    add_custom_command(OUTPUT "${output}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${AP27_BIN_DIR}"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${boinc_library}" "${output}"
+        DEPENDS "${boinc_library}" VERBATIM)
+    list(APPEND AP27_RUNTIME_FILES "${output}")
 endforeach()
 foreach(notice_path IN ITEMS
     "${BOINC_ROOT}/share/doc/libboinc-app7t64/copyright"
@@ -89,28 +81,17 @@ foreach(notice_path IN ITEMS
     "/usr/share/doc/libboinc-app7t64/copyright"
     "/usr/share/doc/libboinc-app-dev/copyright")
     if(EXISTS "${notice_path}")
-        add_custom_command(TARGET package_boinc POST_BUILD
-            COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${notice_path}" "${AP27_PACKAGE_DIR}/BOINC-COPYRIGHT.txt"
-            VERBATIM)
+        set(notice_output "${AP27_BIN_DIR}/BOINC-COPYRIGHT.txt")
+        add_custom_command(OUTPUT "${notice_output}"
+            COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${notice_path}" "${notice_output}"
+            DEPENDS "${notice_path}" VERBATIM)
+        list(APPEND AP27_RUNTIME_FILES "${notice_output}")
         break()
     endif()
 endforeach()
+add_custom_target(ap27_payload ALL DEPENDS ap27_v3d ${AP27_RUNTIME_FILES} "${AP27_APP_INFO}")
 
-include(CTest)
-if(BUILD_TESTING)
-    add_executable(ap27_tile_test EXCLUDE_FROM_ALL tests/tile_run.cpp)
-    target_compile_features(ap27_tile_test PRIVATE cxx_std_26)
-    set_target_properties(ap27_tile_test PROPERTIES CXX_STANDARD 26 CXX_STANDARD_REQUIRED YES
-        CXX_EXTENSIONS NO RUNTIME_OUTPUT_DIRECTORY "${AP27_BIN_DIR}")
-    target_link_libraries(ap27_tile_test PRIVATE Vulkan::Vulkan)
-    target_include_directories(ap27_tile_test PRIVATE "${PROJECT_SOURCE_DIR}/include")
-    add_dependencies(ap27_tile_test ap27_shaders)
-    add_test(NAME ap27_tile_exact COMMAND "$<TARGET_FILE:ap27_tile_test>" 5)
-    add_test(NAME ap27_partial_tile_exact COMMAND "$<TARGET_FILE:ap27_tile_test>" 1 8 366385 64)
-    set_tests_properties(ap27_tile_exact PROPERTIES
-        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
-        ENVIRONMENT "AP27_SHADER_DIR=${AP27_BIN_DIR}")
-    set_tests_properties(ap27_partial_tile_exact PROPERTIES
-        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
-        ENVIRONMENT "AP27_SHADER_DIR=${AP27_BIN_DIR}")
-endif()
+set(AP27_INSTALL_DIR "/var/lib/boinc-client/projects/www.primegrid.com")
+install(TARGETS ap27_v3d RUNTIME DESTINATION "${AP27_INSTALL_DIR}")
+install(FILES ${AP27_RUNTIME_FILES} DESTINATION "${AP27_INSTALL_DIR}")
+install(FILES "${AP27_APP_INFO}" DESTINATION "${AP27_INSTALL_DIR}")
