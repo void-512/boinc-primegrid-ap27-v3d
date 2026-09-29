@@ -1,5 +1,6 @@
 #include <vulkan/vulkan.h>
 #include "ap27_v3d/small_primes.hpp"
+#include "ap27_v3d/tile_layout.hpp"
 #include "ap27_v3d/v3d_search.h"
 #include <algorithm>
 #include <array>
@@ -21,8 +22,8 @@
 static constexpr uint64_t MOD=258559632607830ULL;
 static constexpr uint64_t PRIM23=223092870ULL;
 static constexpr uint32_t SEEDS=32, PER_SEED=12673;
-static constexpr uint32_t N59_COUNT=SEEDS*PER_SEED, CAP=1000000;
-static_assert(MOD < (1ULL<<48)); // Sieve record bit 48 tags the second shift.
+static constexpr uint32_t N59_COUNT=SEEDS*PER_SEED;
+static_assert(MOD < ap27_v3d::SECOND_SHIFT_RECORD_TAG);
 static constexpr uint64_t N0=106990415896110ULL, N30=94805198622871ULL;
 static constexpr uint64_t S3=172373088405220ULL, S5=51711926521566ULL;
 static constexpr uint64_t PRES2=16681266619860ULL, PRES3=181690552643340ULL;
@@ -38,7 +39,6 @@ struct U2 { uint32_t lo,hi; };
 U2 split(uint64_t x) { return {uint32_t(x),uint32_t(x>>32)}; }
 struct U4 { uint32_t x,y,z,w; };
 struct SeedData { U2 seeds[32]; U2 offsets[71]; };
-struct Push { uint32_t s59lo,s59hi,steplo,stephi,shift,count,cap,reserved; };
 struct SieveRec { uint64_t n, mask; bool operator<(const SieveRec& b) const {return std::tie(n,mask)<std::tie(b.n,b.mask);} bool operator==(const SieveRec& b) const {return n==b.n&&mask==b.mask;} };
 struct Outcome { uint64_t n,first; uint32_t count,flags; bool operator<(const Outcome& b) const {return std::tie(n,count,first,flags)<std::tie(b.n,b.count,b.first,b.flags);} bool operator==(const Outcome& b) const {return n==b.n&&count==b.count&&first==b.first&&flags==b.flags;} };
 uint64_t residue(uint64_t pres,uint32_t K) { return (pres*(K%17835)+((pres*17835)%MOD)*(K/17835))%MOD; }
@@ -207,13 +207,15 @@ struct V3D {
         VkDeviceCreateInfo dc{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};dc.queueCreateInfoCount=1;dc.pQueueCreateInfos=&qc;
         check(vkCreateDevice(gpu,&dc,nullptr,&dev),"device");vkGetDeviceQueue(dev,family,0,&queue);
         constexpr std::array<VkDeviceSize,7> sizes={sizeof(SeedData),sizeof(U2)*N59_COUNT,
-            sizeof(U2)*mask_count,sizeof(U4)*CAP,sizeof(U2)*CAP,sizeof(U4)*CAP,64};
+            sizeof(U2)*mask_count,sizeof(U4)*ap27_v3d::INTERMEDIATE_RECORD_CAPACITY,
+            sizeof(U2)*ap27_v3d::CANDIDATE_CAPACITY,
+            sizeof(U4)*ap27_v3d::CANDIDATE_CAPACITY,64};
         for(size_t i=0;i<b.size();++i)
             b[i]=make_buffer(dev,gpu,sizes[i],i==6?VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT:0);
         VkDescriptorSetLayoutBinding lb[7]{};for(uint32_t i=0;i<7;i++){lb[i].binding=i;lb[i].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;lb[i].descriptorCount=1;lb[i].stageFlags=VK_SHADER_STAGE_COMPUTE_BIT;}
         VkDescriptorSetLayoutCreateInfo lc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};lc.bindingCount=7;lc.pBindings=lb;
         check(vkCreateDescriptorSetLayout(dev,&lc,nullptr,&dsl),"descriptor layout");
-        VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(Push)};
+        VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(ap27_v3d::PushConstants)};
         VkPipelineLayoutCreateInfo pc{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};pc.setLayoutCount=1;pc.pSetLayouts=&dsl;pc.pushConstantRangeCount=1;pc.pPushConstantRanges=&range;
         check(vkCreatePipelineLayout(dev,&pc,nullptr,&layout),"pipeline layout");
         VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,7};VkDescriptorPoolCreateInfo dpc{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};dpc.maxSets=1;dpc.poolSizeCount=1;dpc.pPoolSizes=&ps;
@@ -259,7 +261,9 @@ struct V3D {
         uint64_t step=uint64_t(K)*PRIM23;
         std::memset(b[6].ptr,0,b[6].size);
         uint64_t s59=residue(PRES8,K);uint32_t n59=count*PER_SEED;
-        Push push{uint32_t(s59),uint32_t(s59>>32),uint32_t(step),uint32_t(step>>32),shift,n59,CAP,0};
+        ap27_v3d::PushConstants push{uint32_t(s59),uint32_t(s59>>32),uint32_t(step),uint32_t(step>>32),
+                                     shift,n59,ap27_v3d::CANDIDATE_CAPACITY,
+                                     ap27_v3d::INTERMEDIATE_RECORD_CAPACITY};
         check(vkResetCommandBuffer(cb,0),"reset command buffer");
         VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};check(vkBeginCommandBuffer(cb,&begin),"begin command buffer");
         vkCmdBindDescriptorSets(cb,VK_PIPELINE_BIND_POINT_COMPUTE,layout,0,1,&set,0,nullptr);
@@ -269,7 +273,8 @@ struct V3D {
             if(stage==0)vkCmdDispatch(cb,(n59+63)/64,1,1);
             else if(stage==1)vkCmdDispatch(cb,(n59+511)/512,1,1);
             else if(stage==2||stage==4)vkCmdDispatch(cb,1,1,1);
-            else vkCmdDispatchIndirect(cb,b[6].b,(stage==3?4:8)*sizeof(uint32_t));
+            else vkCmdDispatchIndirect(cb,b[6].b,
+                (stage==3?ap27_v3d::SIEVE_DISPATCH_WORD:ap27_v3d::CHECK_DISPATCH_WORD)*sizeof(uint32_t));
             VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};barrier.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT;
             barrier.dstAccessMask=stage==5?VK_ACCESS_HOST_READ_BIT:(VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT|VK_ACCESS_INDIRECT_COMMAND_READ_BIT);
             VkPipelineStageFlags dst=stage==5?VK_PIPELINE_STAGE_HOST_BIT:(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT|VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT);
@@ -280,12 +285,17 @@ struct V3D {
         check(vkQueueSubmit(queue,1,&sub,fence),"queue submit");
         check(vkWaitForFences(dev,1,&fence,VK_TRUE,300000000000ULL),"wait tile fence");
         const uint32_t* control=static_cast<const uint32_t*>(b[6].ptr);
-        if(control[2] || control[0]>CAP || control[1]>CAP)throw std::runtime_error("V3D output overflow or invalid PRP arithmetic");
+        if(control[ap27_v3d::ERROR_FLAGS_WORD] ||
+           control[ap27_v3d::INTERMEDIATE_RECORD_COUNT_WORD]>ap27_v3d::INTERMEDIATE_RECORD_CAPACITY ||
+           control[ap27_v3d::CANDIDATE_COUNT_WORD]>ap27_v3d::CANDIDATE_CAPACITY ||
+           control[ap27_v3d::FINAL_RECORD_COUNT_WORD]>
+               control[ap27_v3d::INTERMEDIATE_RECORD_COUNT_WORD])
+            throw std::runtime_error("V3D output overflow or invalid PRP arithmetic");
         const U4* status=static_cast<const U4*>(b[5].ptr);
         uint32_t observed_hits=0;
-        for(uint32_t i=0;i<control[1];i++)if(status[i].w&2u)
+        for(uint32_t i=0;i<control[ap27_v3d::CANDIDATE_COUNT_WORD];i++)if(status[i].w&2u)
             { hits.push_back({status[i].x,pack(status[i].y,status[i].z)}); observed_hits++; }
-        if(observed_hits!=control[3])throw std::runtime_error("V3D hit count mismatch");
+        if(observed_hits!=control[ap27_v3d::AP_HIT_COUNT_WORD])throw std::runtime_error("V3D hit count mismatch");
     }
 };
 

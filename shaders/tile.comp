@@ -15,19 +15,29 @@ layout(std430,set=0,binding=0) readonly buffer Seeds {
 } seed_data;
 layout(std430,set=0,binding=1) buffer N59 { uvec2 n[]; } n59_data;
 layout(std430,set=0,binding=2) readonly buffer Masks { uvec2 m[]; } mask_data;
+// Each record holds a 64-bit residue and mask; bit 48 of the residue tags shift +64.
 layout(std430,set=0,binding=3) buffer SieveRecords { uvec4 r[]; } sieve_data;
 layout(std430,set=0,binding=4) buffer Candidates { uvec2 n[]; } candidate_data;
 layout(std430,set=0,binding=5) buffer Statuses { uvec4 s[]; } status_data;
 layout(std430,set=0,binding=6) buffer Control { uint c[]; } control_data;
 layout(push_constant) uniform Parameters {
     uvec4 values; // S59 low/high, STEP low/high
-    uvec4 sizes;  // shift, n59 count, output capacity, reserved
+    uvec4 sizes;  // shift, n59 count, candidate capacity, sieve-record capacity
 } params;
 
 const uvec2 MOD=uvec2(2601388630u,60200u);
+const uint SECOND_SHIFT_TAG=0x10000u; // MOD < 2^48; this bit is free in n.y.
+const uint PAIRED_SHIFT_OFFSET=64u;
+const uint INTERMEDIATE_RECORD_COUNT=0u;
+const uint CANDIDATE_COUNT=1u;
+const uint ERROR_FLAGS=2u;
+const uint AP_HIT_COUNT=3u;
+const uint SIEVE_DISPATCH=4u; // Three control words for vkCmdDispatchIndirect.
+const uint CHECK_DISPATCH=8u;
+const uint FINAL_SIEVE_RECORD_COUNT=12u;
 
 #if STAGE==1
-#include "sieve_mask_pair_tail.glsl"
+#include "sieve_masks_early.glsl"
 
 uint advance_residue(uint r, uint stride_r, uint p, uint mod_r, bool wrapped) {
     int next=int(r)+int(stride_r)-(wrapped ? int(mod_r) : 0);
@@ -35,6 +45,9 @@ uint advance_residue(uint r, uint stride_r, uint p, uint mod_r, bool wrapped) {
     if(next>=int(p)) next-=int(p);
     return uint(next);
 }
+#endif
+#if STAGE==3
+#include "sieve_masks_late.glsl"
 #endif
 
 uvec2 residue_add(uvec2 a,uvec2 b) {
@@ -57,9 +70,9 @@ bool passes_small_primes(uvec2 n) {
 void compact_bit(uvec2 base,uint bit,uint shift) {
     uvec2 n=add64(base,small_multiple(bit+shift));
     if(!passes_small_primes(n)) return;
-    uint slot=atomicAdd(control_data.c[1],1u);
+    uint slot=atomicAdd(control_data.c[CANDIDATE_COUNT],1u);
     if(slot<params.sizes.z) candidate_data.n[slot]=n;
-    else atomicOr(control_data.c[2],2u);
+    else atomicOr(control_data.c[ERROR_FLAGS],2u);
 }
 void main() {
     uint idx=gl_GlobalInvocationID.x;
@@ -83,7 +96,7 @@ void main() {
     uint b=(n.x>>30)|(n.y<<2);
     uint sa=stride.x&0x3fffffffu;
     uint sb=(stride.x>>30)|(stride.y<<2);
-    // First six entries of sieve_mask.glsl; advance each residue modulo p.
+    // The first six primes use advancing residues; the generated fragment handles primes 7-48.
     uint r61=(a+60u*b)%61u, d61=(sa+60u*sb)%61u;
     uint r67=(a+25u*b)%67u, d67=(sa+25u*sb)%67u;
     uint r71=(a+20u*b)%71u, d71=(sa+20u*sb)%71u;
@@ -123,18 +136,17 @@ void main() {
         if((bits.x|bits.y|bits.z|bits.w)!=0u) {
             a=n.x&0x3fffffffu;
             b=(n.x>>30)|(n.y<<2);
-            bits=sieve_mask_tail(a,b,bits);
+            bits=apply_early_prime_masks(a,b,bits);
         }
         if((bits.x|bits.y)!=0u) {
-            uint slot=atomicAdd(control_data.c[0],1u);
-            if(slot<params.sizes.z) sieve_data.r[slot]=uvec4(n,bits.xy);
-            else atomicOr(control_data.c[2],1u);
+            uint slot=atomicAdd(control_data.c[INTERMEDIATE_RECORD_COUNT],1u);
+            if(slot<params.sizes.w) sieve_data.r[slot]=uvec4(n,bits.xy);
+            else atomicOr(control_data.c[ERROR_FLAGS],1u);
         }
         if((bits.z|bits.w)!=0u) {
-            uint slot=atomicAdd(control_data.c[0],1u);
-            // n < MOD < 2^48, so bit 48 can tag the second shift.
-            if(slot<params.sizes.z) sieve_data.r[slot]=uvec4(n.x,n.y|0x10000u,bits.zw);
-            else atomicOr(control_data.c[2],1u);
+            uint slot=atomicAdd(control_data.c[INTERMEDIATE_RECORD_COUNT],1u);
+            if(slot<params.sizes.w) sieve_data.r[slot]=uvec4(n.x,n.y|SECOND_SHIFT_TAG,bits.zw);
+            else atomicOr(control_data.c[ERROR_FLAGS],1u);
         }
         uvec2 sum=add64(n,stride);
         bool wrapped=!lt64(sum,MOD);
@@ -149,21 +161,26 @@ void main() {
     }
 #elif STAGE==2
     if(idx!=0u) return;
-    control_data.c[4]=(min(control_data.c[0],params.sizes.z)+63u)/64u;
-    control_data.c[5]=1u; control_data.c[6]=1u;
+    control_data.c[SIEVE_DISPATCH]=(min(control_data.c[INTERMEDIATE_RECORD_COUNT],params.sizes.w)+63u)/64u;
+    control_data.c[SIEVE_DISPATCH+1u]=1u; control_data.c[SIEVE_DISPATCH+2u]=1u;
 #elif STAGE==3
-    if(idx>=min(control_data.c[0],params.sizes.z)) return;
-    uvec4 record=sieve_data.r[idx];
-    uvec2 base=record.xy;
-    uint shift=params.sizes.x+(base.y>>16)*64u;
-    base.y&=0xffffu;
-    uint bits=record.z;
+    if(idx>=min(control_data.c[INTERMEDIATE_RECORD_COUNT],params.sizes.w)) return;
+    uvec4 intermediate_record=sieve_data.r[idx];
+    uvec2 base=intermediate_record.xy;
+    bool second_shift=(base.y&SECOND_SHIFT_TAG)!=0u;
+    uint shift=params.sizes.x+(second_shift ? PAIRED_SHIFT_OFFSET : 0u);
+    base.y&=~SECOND_SHIFT_TAG;
+    uvec2 final_mask=apply_late_prime_masks(base.x&0x3fffffffu,(base.x>>30)|(base.y<<2),intermediate_record.zw,second_shift);
+    sieve_data.r[idx]=uvec4(intermediate_record.xy,final_mask);
+    if((final_mask.x|final_mask.y)==0u) return;
+    atomicAdd(control_data.c[FINAL_SIEVE_RECORD_COUNT],1u);
+    uint bits=final_mask.x;
     while(bits!=0u) {
         uint bit=uint(findLSB(bits));
         compact_bit(base,bit,shift);
         bits&=bits-1u;
     }
-    bits=record.w;
+    bits=final_mask.y;
     while(bits!=0u) {
         uint bit=32u+uint(findLSB(bits));
         compact_bit(base,bit,shift);
@@ -171,15 +188,15 @@ void main() {
     }
 #elif STAGE==4
     if(idx!=0u) return;
-    control_data.c[8]=(min(control_data.c[1],params.sizes.z)+63u)/64u;
-    control_data.c[9]=1u; control_data.c[10]=1u;
+    control_data.c[CHECK_DISPATCH]=(min(control_data.c[CANDIDATE_COUNT],params.sizes.z)+63u)/64u;
+    control_data.c[CHECK_DISPATCH+1u]=1u; control_data.c[CHECK_DISPATCH+2u]=1u;
 #elif STAGE==5
-    if(idx>=min(control_data.c[1],params.sizes.z)) return;
+    if(idx>=min(control_data.c[CANDIDATE_COUNT],params.sizes.z)) return;
     uvec2 n=candidate_data.n[idx];
     uvec2 step=params.values.zw;
     uvec2 m=add64(n,mul64low(step,uvec2(5u,0u)));
     if(lt64(m,n) || (m.x&1u)==0u) {
-        atomicOr(control_data.c[2],4u);
+        atomicOr(control_data.c[ERROR_FLAGS],4u);
         status_data.s[idx]=uvec4(0u);
         return;
     }
@@ -192,7 +209,7 @@ void main() {
         first_prp=1u;
         count++;
         uvec2 next=add64(m,step);
-        if(lt64(next,n)) { atomicOr(control_data.c[2],4u); break; }
+        if(lt64(next,n)) { atomicOr(control_data.c[ERROR_FLAGS],4u); break; }
         m=next;
     }
     uvec2 first=uvec2(0u);
@@ -210,7 +227,7 @@ void main() {
         }
         first=add64(m,step);
         flags|=2u;
-        atomicAdd(control_data.c[3],1u);
+        atomicAdd(control_data.c[AP_HIT_COUNT],1u);
     }
     status_data.s[idx]=uvec4(count,first,flags);
 #endif

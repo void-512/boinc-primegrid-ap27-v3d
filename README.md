@@ -49,7 +49,9 @@ sudo cp build/boinc_package/* /var/lib/boinc-client/projects/www.primegrid.com/
 
 To accept new tasks from BOINC, you need to copy all the files under `build/boinc_package/` to  `/var/lib/boinc-client/projects/www.primegrid.com`, which is the default path for primegrid.
 
-The current implementation keeps one Vulkan device, mapped buffers, descriptor set, six pipelines, command buffer, and fence for the application's lifetime. It uses a 512-lane V3D sieve workgroup and advances residues for the first six small primes. Two adjacent shifts share `n59` generation, residue evolution, and one mask table; compaction and probable-prime checks remain on the GPU. One submission and fence wait are used per paired tile. Checkpoints keep the same format: an interrupted K is replayed, with that K's partial results rolled back.
+The current implementation keeps one Vulkan device, mapped buffers, descriptor set, six pipelines, command buffer, and fence for the application's lifetime. It uses a 512-lane V3D sieve workgroup and advances residues for the first six small primes. Two adjacent shifts share `n59` generation, residue evolution, and one mask table. The first 48 sieve primes run in the main sieve shader; the remaining 35 run during GPU compaction on surviving records. One submission and fence wait are used per paired tile. Checkpoints keep the same format: an interrupted K is replayed, with that K's partial results rolled back.
+
+The checked-in `include/ap27_v3d/small_primes.hpp` table is the source for the specialized shader fragments. Run `python3 tools/gen_sieve.py` after changing that table, or `python3 tools/gen_sieve.py --check` to verify the generated fragments. The sieve record buffer holds intermediate survivors; `include/ap27_v3d/tile_layout.hpp` names its capacity, the candidate capacity, push constants, and control-buffer words used by the host and exact validator.
 
 ## Useful BOINC commands
 

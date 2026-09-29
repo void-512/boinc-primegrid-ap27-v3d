@@ -46,8 +46,9 @@ foreach(stage RANGE 0 5)
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${AP27_BIN_DIR}"
         COMMAND "${GLSLC_EXECUTABLE}" -O "-I${AP27_SHADER_DIR}"
             "-DSTAGE=${stage}" -fshader-stage=comp -o "${output}" "${AP27_SHADER_DIR}/tile.comp"
-        DEPENDS "${AP27_SHADER_DIR}/tile.comp" "${AP27_SHADER_DIR}/sieve_mask.glsl"
-            "${AP27_SHADER_DIR}/sieve_mask_pair_tail.glsl" "${AP27_SHADER_DIR}/ap27_math.glsl"
+        DEPENDS "${AP27_SHADER_DIR}/tile.comp"
+            "${AP27_SHADER_DIR}/sieve_masks_early.glsl" "${AP27_SHADER_DIR}/sieve_masks_late.glsl"
+            "${AP27_SHADER_DIR}/ap27_math.glsl"
         VERBATIM)
     list(APPEND AP27_SHADER_OUTPUTS "${output}")
 endforeach()

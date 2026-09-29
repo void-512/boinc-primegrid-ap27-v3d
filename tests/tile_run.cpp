@@ -1,5 +1,6 @@
 #include <vulkan/vulkan.h>
 #include "ap27_v3d/small_primes.hpp"
+#include "ap27_v3d/tile_layout.hpp"
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -18,7 +19,7 @@ static constexpr uint64_t MOD=258559632607830ULL;
 static constexpr uint64_t PRIM23=223092870ULL;
 static uint32_t test_k=366384;
 static constexpr uint32_t SEEDS=32, PER_SEED=12673;
-static constexpr uint32_t N59_COUNT=SEEDS*PER_SEED, CAP=1000000;
+static constexpr uint32_t N59_COUNT=SEEDS*PER_SEED;
 static constexpr uint64_t N0=106990415896110ULL, N30=94805198622871ULL;
 static constexpr uint64_t S3=172373088405220ULL, S5=51711926521566ULL;
 static constexpr uint64_t PRES2=16681266619860ULL, PRES3=181690552643340ULL;
@@ -34,7 +35,6 @@ struct U2 { uint32_t lo,hi; };
 U2 split(uint64_t x) { return {uint32_t(x),uint32_t(x>>32)}; }
 struct U4 { uint32_t x,y,z,w; };
 struct SeedData { U2 seeds[32]; U2 offsets[71]; };
-struct Push { uint32_t s59lo,s59hi,steplo,stephi,shift,count,cap,reserved; };
 struct SieveRec { uint64_t n, mask; bool operator<(const SieveRec& b) const {return std::tie(n,mask)<std::tie(b.n,b.mask);} bool operator==(const SieveRec& b) const {return n==b.n&&mask==b.mask;} };
 struct Outcome { uint64_t n,first; uint32_t count,flags; bool operator<(const Outcome& b) const {return std::tie(n,count,first,flags)<std::tie(b.n,b.count,b.first,b.flags);} bool operator==(const Outcome& b) const {return n==b.n&&count==b.count&&first==b.first&&flags==b.flags;} };
 uint64_t residue(uint64_t pres) { return (pres*(test_k%17835)+((pres*17835)%MOD)*(test_k/17835))%MOD; }
@@ -213,15 +213,15 @@ try {
         make_buffer(dev,gpu,sizeof(SeedData),0),
         make_buffer(dev,gpu,sizeof(U2)*N59_COUNT,0),
         make_buffer(dev,gpu,sizeof(U2)*mask_count,0),
-        make_buffer(dev,gpu,sizeof(U4)*CAP,0),
-        make_buffer(dev,gpu,sizeof(U2)*CAP,0),
-        make_buffer(dev,gpu,sizeof(U4)*CAP,0),
+        make_buffer(dev,gpu,sizeof(U4)*ap27_v3d::INTERMEDIATE_RECORD_CAPACITY,0),
+        make_buffer(dev,gpu,sizeof(U2)*ap27_v3d::CANDIDATE_CAPACITY,0),
+        make_buffer(dev,gpu,sizeof(U4)*ap27_v3d::CANDIDATE_CAPACITY,0),
         make_buffer(dev,gpu,64,VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT)};
     std::memcpy(b[0].ptr,&seeds,sizeof(seeds));
     VkDescriptorSetLayoutBinding lb[7]{};for(uint32_t i=0;i<7;i++){lb[i].binding=i;lb[i].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;lb[i].descriptorCount=1;lb[i].stageFlags=VK_SHADER_STAGE_COMPUTE_BIT;}
     VkDescriptorSetLayoutCreateInfo lc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};lc.bindingCount=7;lc.pBindings=lb;
     VkDescriptorSetLayout dsl;check(vkCreateDescriptorSetLayout(dev,&lc,nullptr,&dsl),"descriptor layout");
-    VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(Push)};
+    VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(ap27_v3d::PushConstants)};
     VkPipelineLayoutCreateInfo pc{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};pc.setLayoutCount=1;pc.pSetLayouts=&dsl;pc.pushConstantRangeCount=1;pc.pPushConstantRanges=&range;
     VkPipelineLayout layout;check(vkCreatePipelineLayout(dev,&pc,nullptr,&layout),"pipeline layout");
     VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,7};VkDescriptorPoolCreateInfo dpc{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};dpc.maxSets=1;dpc.poolSizeCount=1;dpc.pPoolSizes=&ps;
@@ -283,7 +283,7 @@ try {
     VkCommandBufferAllocateInfo ca{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};ca.commandPool=command_pool;ca.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY;ca.commandBufferCount=1;
     VkCommandBuffer cb;check(vkAllocateCommandBuffers(dev,&ca,&cb),"command buffer");
     VkFenceCreateInfo fc{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};VkFence fence;check(vkCreateFence(dev,&fc,nullptr,&fence),"fence");
-    std::printf("device=%s driver=%u.%u.%u K=%u n59=%u capacity=%u pairs=%u shifts=%u start_shift=%u\n",props.deviceName,VK_VERSION_MAJOR(props.driverVersion),VK_VERSION_MINOR(props.driverVersion),VK_VERSION_PATCH(props.driverVersion),test_k,n59_count,CAP,pairs,2*pairs,start_shift);
+    std::printf("device=%s driver=%u.%u.%u K=%u n59=%u candidate_capacity=%u intermediate_record_capacity=%u pairs=%u shifts=%u start_shift=%u\n",props.deviceName,VK_VERSION_MAJOR(props.driverVersion),VK_VERSION_MINOR(props.driverVersion),VK_VERSION_PATCH(props.driverVersion),test_k,n59_count,ap27_v3d::CANDIDATE_CAPACITY,ap27_v3d::INTERMEDIATE_RECORD_CAPACITY,pairs,2*pairs,start_shift);
     double total_gpu_ms=0,total_gpu_window_cpu_ms=0,total_gpu_window_wall_ms=0,total_ref_ms=0,total_host_cpu_ms=0,total_host_wall_ms=0,total_mask_cpu_ms=0;
     for(uint32_t shift_i=0;shift_i<pairs;shift_i++){
         uint32_t shift=start_shift+128*shift_i;
@@ -300,13 +300,15 @@ try {
         std::vector<Outcome> outcome_ref;outcome_ref.reserve(cand_ref.size());
         for(uint64_t n:cand_ref)outcome_ref.push_back(check_candidate(n,step));
         for(uint64_t n:cand_ref2)outcome_ref.push_back(check_candidate(n,step));
-        for(auto& record:sieve_ref2)record.n|=1ULL<<48;
+        for(auto& record:sieve_ref2)record.n|=ap27_v3d::SECOND_SHIFT_RECORD_TAG;
         sieve_ref.insert(sieve_ref.end(),sieve_ref2.begin(),sieve_ref2.end());
         cand_ref.insert(cand_ref.end(),cand_ref2.begin(),cand_ref2.end());
         total_ref_ms+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-ref_start).count();
         auto host_wall_start=std::chrono::steady_clock::now();uint64_t host_cpu_start=process_ns();
         std::memset(b[6].ptr,0,b[6].size);
-        Push push{uint32_t(s59),uint32_t(s59>>32),uint32_t(step),uint32_t(step>>32),shift,n59_count,CAP,0};
+        ap27_v3d::PushConstants push{uint32_t(s59),uint32_t(s59>>32),uint32_t(step),uint32_t(step>>32),
+                                     shift,n59_count,ap27_v3d::CANDIDATE_CAPACITY,
+                                     ap27_v3d::INTERMEDIATE_RECORD_CAPACITY};
         check(vkResetCommandBuffer(cb,0),"reset command buffer");
         VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};check(vkBeginCommandBuffer(cb,&begin),"begin command buffer");
         vkCmdResetQueryPool(cb,qp,0,12);
@@ -320,7 +322,8 @@ try {
             if(stage==0)vkCmdDispatch(cb,(n59_count+63)/64,1,1);
             else if(stage==1)vkCmdDispatch(cb,(n59_count+sieve_workgroup-1)/sieve_workgroup,1,1);
             else if(stage==2||stage==4)vkCmdDispatch(cb,1,1,1);
-            else vkCmdDispatchIndirect(cb,b[6].b,(stage==3?4:8)*sizeof(uint32_t));
+            else vkCmdDispatchIndirect(cb,b[6].b,
+                (stage==3?ap27_v3d::SIEVE_DISPATCH_WORD:ap27_v3d::CHECK_DISPATCH_WORD)*sizeof(uint32_t));
             VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};barrier.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT;
             barrier.dstAccessMask=VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT|VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
             if(stage==5)barrier.dstAccessMask=VK_ACCESS_HOST_READ_BIT;
@@ -338,8 +341,11 @@ try {
         double window_cpu_ms=double(process_ns()-gcpu)/1e6;
         double window_wall_ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-gwall).count();
         const uint32_t* host_control=static_cast<const uint32_t*>(b[6].ptr);
+        if(host_control[ap27_v3d::INTERMEDIATE_RECORD_COUNT_WORD]>ap27_v3d::INTERMEDIATE_RECORD_CAPACITY||
+           host_control[ap27_v3d::CANDIDATE_COUNT_WORD]>ap27_v3d::CANDIDATE_CAPACITY)
+            throw std::runtime_error("output count exceeds mapped capacity");
         const U4* host_status=static_cast<const U4*>(b[5].ptr);
-        uint32_t host_hits=0;for(uint32_t i=0;i<host_control[1];i++)if(host_status[i].w&2u)host_hits++;
+        uint32_t host_hits=0;for(uint32_t i=0;i<host_control[ap27_v3d::CANDIDATE_COUNT_WORD];i++)if(host_status[i].w&2u)host_hits++;
         double host_cpu_ms=double(process_ns()-host_cpu_start)/1e6;
         double host_wall_ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-host_wall_start).count();
         total_host_cpu_ms+=host_cpu_ms;total_host_wall_ms+=host_wall_ms;
@@ -353,12 +359,15 @@ try {
         if(profile){
             std::vector<VkPerformanceCounterResultKHR> values(perf_names.size());
             check(vkGetQueryPoolResults(dev,perf_qp,0,1,values.size()*sizeof(values[0]),values.data(),values.size()*sizeof(values[0]),VK_QUERY_RESULT_WAIT_BIT),"get performance counters");
-            std::printf("PERF shift=%u",shift);
+            std::printf("PERF shift=%u stage=1",shift);
             for(size_t i=0;i<values.size();i++)std::printf(" %s=%llu",perf_names[i].c_str(),(unsigned long long)values[i].uint64);
             std::printf("\n");
         }
         const uint32_t* control=static_cast<const uint32_t*>(b[6].ptr);
-        uint32_t nr=control[0],nc=control[1],overflow=control[2],hits=control[3];
+        uint32_t nr=control[ap27_v3d::INTERMEDIATE_RECORD_COUNT_WORD];
+        uint32_t nc=control[ap27_v3d::CANDIDATE_COUNT_WORD];
+        uint32_t overflow=control[ap27_v3d::ERROR_FLAGS_WORD];
+        uint32_t hits=control[ap27_v3d::AP_HIT_COUNT_WORD];
         std::printf("shift=%u gpu_ms setup=%.3f sieve=%.3f prep_compact=%.3f compact=%.3f prep_check=%.3f check=%.3f sum=%.3f inter_stage=%.3f span=%.3f wall_ms=%.3f process_cpu_ms=%.3f host_cpu_ms=%.3f host_wall_ms=%.3f mask_cpu_ms=%.3f host_hits=%u records=%u candidates=%u hits=%u overflow=%u ref_records=%zu ref_candidates=%zu\n",
                     shift,gpu_stage[0],gpu_stage[1],gpu_stage[2],gpu_stage[3],gpu_stage[4],gpu_stage[5],gpu_ms,inter_stage_ms,double(ticks[11]-ticks[0])*props.limits.timestampPeriod/1e6,window_wall_ms,window_cpu_ms,host_cpu_ms,host_wall_ms,mask_cpu_ms,host_hits,nr,nc,hits,overflow,sieve_ref.size(),cand_ref.size());
         if(overflow)throw std::runtime_error("bounded output overflow; retry with larger capacity or smaller tile");
@@ -367,9 +376,14 @@ try {
             std::fprintf(stderr,"n59 mismatch shift=%u idx=%u expected=%llu actual=%llu\n",shift,i,(unsigned long long)expected_n59[i],(unsigned long long)pack(actual_n59[i].lo,actual_n59[i].hi));
             throw std::runtime_error("GPU setupn differs from CPU");
         }
-        if(nr!=sieve_ref.size())throw std::runtime_error("sieve record count mismatch");
         const U4* sr=static_cast<const U4*>(b[3].ptr);std::vector<SieveRec> sieve_gpu; sieve_gpu.reserve(nr);
-        for(uint32_t i=0;i<nr;i++)sieve_gpu.push_back({pack(sr[i].x,sr[i].y),pack(sr[i].z,sr[i].w)});
+        for(uint32_t i=0;i<nr;i++){
+            uint64_t mask=pack(sr[i].z,sr[i].w);
+            if(mask)sieve_gpu.push_back({pack(sr[i].x,sr[i].y),mask});
+        }
+        if(sieve_gpu.size()!=sieve_ref.size()||
+           control[ap27_v3d::FINAL_RECORD_COUNT_WORD]!=sieve_gpu.size())
+            throw std::runtime_error("final sieve record count mismatch");
         std::sort(sieve_gpu.begin(),sieve_gpu.end());std::sort(sieve_ref.begin(),sieve_ref.end());
         if(sieve_gpu!=sieve_ref){
             auto mismatch=std::mismatch(sieve_gpu.begin(),sieve_gpu.end(),sieve_ref.begin());
@@ -398,7 +412,8 @@ try {
         if(hits!=expected_hits)throw std::runtime_error("AP hit count mismatch");
         for(const auto& o:outcome_ref)if(o.flags&2)
             std::printf("AP_HIT shift=%u length=%u first=%llu candidate=%llu\n",shift,o.count,(unsigned long long)o.first,(unsigned long long)o.n);
-        std::printf("shift=%u PASS n59=%u sieve_records=%u compacted=%u PRP=%u AP_hits=%u\n",shift,n59_count,nr,nc,nc,hits);
+        std::printf("shift=%u PASS n59=%u final_sieve_records=%u compacted=%u PRP=%u AP_hits=%u\n",shift,n59_count,control[ap27_v3d::FINAL_RECORD_COUNT_WORD],nc,nc,hits);
+        std::printf("intermediate_records=%u final_records=%u intermediate_bytes=%zu\n",nr,control[ap27_v3d::FINAL_RECORD_COUNT_WORD],size_t(nr)*sizeof(U4));
         std::fflush(stdout);
     }
     auto wall1=std::chrono::steady_clock::now();double total_wall_ms=std::chrono::duration<double,std::milli>(wall1-wall0).count();double total_cpu_ms=double(process_ns()-cpu0)/1e6;
