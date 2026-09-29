@@ -586,23 +586,17 @@ int main(int argc, char *argv[])
 {
 	int i, K, SHIFT;
 
-	// disable kernel cache.  compile every time, for testing.
-	// linux
-	// setenv("CUDA_CACHE_DISABLE", "1", 1);
-	// windows
-	// _putenv_s("CUDA_CACHE_DISABLE", "1");
-
         // Initialize BOINC
         BOINC_OPTIONS options;
         boinc_options_defaults(options);
 	options.normal_thread_priority = true;
 	if (boinc_init_options(&options)) { fprintf(stderr,"BOINC initialization failed\n"); return EXIT_FAILURE; }
 
-	fprintf(stderr, "AP27 ARM64 V3D/CPU integration, based on AP26 version %s by Bryan Little\n",VERS);
+	fprintf(stderr, "AP27 ARM64 V3D integration, based on AP26 version %s by Bryan Little\n",VERS);
 	fprintf(stderr, "Compiled " __DATE__ " with GCC " __VERSION__ "\n");
 
 	if(boinc_is_standalone()){
-		printf("AP27 ARM64 V3D/CPU integration, based on AP26 version %s by Bryan Little\n",VERS);
+		printf("AP27 ARM64 V3D integration, based on AP26 version %s by Bryan Little\n",VERS);
 		printf("Compiled " __DATE__ " with GCC " __VERSION__ "\n");
 	}
 

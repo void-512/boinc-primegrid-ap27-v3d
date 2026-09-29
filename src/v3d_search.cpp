@@ -4,19 +4,15 @@
 #include "ap27_v3d/v3d_search.h"
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <memory>
 #include <span>
 #include <stdexcept>
 #include <string>
-#include <tuple>
 #include <vector>
-#include <time.h>
 #include <unistd.h>
 
 static constexpr uint64_t MOD=258559632607830ULL;
@@ -24,48 +20,17 @@ static constexpr uint64_t PRIM23=223092870ULL;
 static constexpr uint32_t SEEDS=32, PER_SEED=12673;
 static constexpr uint32_t N59_COUNT=SEEDS*PER_SEED;
 static_assert(MOD < ap27_v3d::SECOND_SHIFT_RECORD_TAG);
-static constexpr uint64_t N0=106990415896110ULL, N30=94805198622871ULL;
-static constexpr uint64_t S3=172373088405220ULL, S5=51711926521566ULL;
-static constexpr uint64_t PRES2=16681266619860ULL, PRES3=181690552643340ULL;
-static constexpr uint64_t PRES4=132432982555230ULL, PRES5=126273308948010ULL;
+static constexpr uint64_t PRES5=126273308948010ULL;
 static constexpr uint64_t PRES6=115526644356690ULL, PRES7=48784836341100ULL;
 static constexpr uint64_t PRES8=100794433050510ULL;
-static constexpr uint32_t SMALL[]={7,11,13,17,19,23};
 
 void check(VkResult r,const char* what) { if(r!=VK_SUCCESS)throw std::runtime_error(std::string(what)+": VkResult "+std::to_string(r)); }
-uint64_t process_ns() { timespec t{}; clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&t); return uint64_t(t.tv_sec)*1000000000ULL+t.tv_nsec; }
 uint64_t pack(uint32_t lo,uint32_t hi) { return uint64_t(lo)|(uint64_t(hi)<<32); }
 struct U2 { uint32_t lo,hi; };
 U2 split(uint64_t x) { return {uint32_t(x),uint32_t(x>>32)}; }
 struct U4 { uint32_t x,y,z,w; };
 struct SeedData { U2 seeds[32]; U2 offsets[71]; };
-struct SieveRec { uint64_t n, mask; bool operator<(const SieveRec& b) const {return std::tie(n,mask)<std::tie(b.n,b.mask);} bool operator==(const SieveRec& b) const {return n==b.n&&mask==b.mask;} };
-struct Outcome { uint64_t n,first; uint32_t count,flags; bool operator<(const Outcome& b) const {return std::tie(n,count,first,flags)<std::tie(b.n,b.count,b.first,b.flags);} bool operator==(const Outcome& b) const {return n==b.n&&count==b.count&&first==b.first&&flags==b.flags;} };
 uint64_t residue(uint64_t pres,uint32_t K) { return (pres*(K%17835)+((pres*17835)%MOD)*(K/17835))%MOD; }
-uint64_t mulmod(uint64_t a,uint64_t b,uint64_t n){return uint64_t((__uint128_t(a)*b)%n);}
-uint64_t powmod(uint64_t a,uint64_t e,uint64_t n){uint64_t r=1%n;for(;e;e>>=1,a=mulmod(a,a,n))if(e&1)r=mulmod(r,a,n);return r;}
-bool strong_prp_cpu(uint64_t n){
-    if(n<3 || !(n&1)) throw std::runtime_error("non-odd PRP modulus");
-    uint64_t d=n-1; unsigned t=__builtin_ctzll(d); d>>=t;
-    uint64_t a=powmod(2,d,n); if(a==1||a==n-1)return true;
-    for(unsigned i=1;i<t;i++){a=mulmod(a,a,n);if(a==n-1)return true;}
-    return false;
-}
-Outcome check_candidate(uint64_t n,uint64_t step){
-    uint64_t m=n+5*step; if(m<n) throw std::runtime_error("CPU forward overflow");
-    uint32_t k=0,flags=0;
-    while(strong_prp_cpu(m)){
-        flags=1; k++; m+=step;
-        if(m<n) throw std::runtime_error("CPU forward overflow");
-    }
-    uint64_t first=0;
-    if(k>=10){
-        m=n+4*step; uint64_t start=m;
-        while(strong_prp_cpu(m)){m-=step;k++;if(m>start)break;}
-        first=m+step; flags|=2;
-    }
-    return {n,first,k,flags};
-}
 SeedData make_seed_offsets(uint32_t K){
     SeedData d{};
     const uint64_t s43=residue(PRES5,K),s47=residue(PRES6,K),s53=residue(PRES7,K);
@@ -76,28 +41,6 @@ SeedData make_seed_offsets(uint32_t K){
 }
 void fill_seed_tile(SeedData& d,const uint64_t* n43,uint32_t base,uint32_t count){
     for(uint32_t i=0;i<count;i++)d.seeds[i]=split(n43[base+i]);
-}
-std::vector<uint64_t> generate_cpu(const SeedData& seeds,uint32_t K,uint32_t count){
-    std::vector<uint64_t> n(count*PER_SEED);
-    const uint64_t s43=residue(PRES5,K),s47=residue(PRES6,K),s53=residue(PRES7,K);
-    uint32_t idx=0;
-    for(uint32_t seed=0;seed<count;seed++){
-        uint64_t n43=pack(seeds.seeds[seed].lo,seeds.seeds[seed].hi);
-        for(uint32_t i43=0;i43<19;i43++){
-            uint64_t n47=n43;
-            for(uint32_t i47=0;i47<23;i47++){
-                uint64_t n53=n47;
-                for(uint32_t i53=0;i53<29;i53++){
-                    n[idx++]=n53;
-                    n53+=s53;if(n53>=MOD)n53-=MOD;
-                }
-                n47+=s47;if(n47>=MOD)n47-=MOD;
-            }
-            n43+=s43;if(n43>=MOD)n43-=MOD;
-        }
-    }
-    if(idx!=count*PER_SEED)throw std::runtime_error("CPU setupn count mismatch");
-    return n;
 }
 void fill_masks(std::span<U2,mask_count> masks,uint64_t step,uint32_t shift){
     std::array<uint8_t,small_primes.back().p> ok{};
@@ -115,38 +58,6 @@ void fill_masks(std::span<U2,mask_count> masks,uint64_t step,uint32_t shift){
         }
     }
 }
-std::vector<SieveRec> sieve_cpu(const std::vector<uint64_t>& n59,const std::vector<U2>& masks,uint64_t stride){
-    std::vector<SieveRec> out; out.reserve(30000);
-    for(auto seed:n59){
-        uint64_t n=seed;
-        for(uint32_t iter=0;iter<35;iter++){
-            uint32_t a=uint32_t(n)&0x3fffffff,b=uint32_t(n>>30);
-            uint64_t bits=UINT64_MAX;
-            for(auto prime:small_primes){
-                const auto& m=masks[prime.offset+(a+prime.coeff*b)%prime.p];
-                bits&=pack(m.lo,m.hi);
-                if(!bits)break;
-            }
-            if(bits)out.push_back({n,bits});
-            n+=stride; if(n>=MOD)n-=MOD;
-        }
-    }
-    return out;
-}
-std::vector<uint64_t> compact_cpu(const std::vector<SieveRec>& rec,uint32_t shift){
-    std::vector<uint64_t> out;out.reserve(15000);
-    for(const auto& r:rec){
-        uint64_t bits=r.mask;
-        while(bits){
-            uint32_t bit=__builtin_ctzll(bits); bits&=bits-1;
-            uint64_t n=r.n+(uint64_t(bit)+shift)*MOD;
-            bool keep=true;for(uint32_t p:SMALL)if(n%p==0){keep=false;break;}
-            if(keep)out.push_back(n);
-        }
-    }
-    return out;
-}
-
 std::vector<uint32_t> read_spirv(const std::string& path){
     std::ifstream f(path,std::ios::binary|std::ios::ate);if(!f)throw std::runtime_error("missing shader "+path);
     auto n=f.tellg();if(n<=0||n%4)throw std::runtime_error("bad SPIR-V size");
@@ -300,46 +211,30 @@ struct V3D {
 };
 
 static std::unique_ptr<V3D> active_v3d;
-static bool cpu_backend=false;
 void v3d_search_init(){
-    const char* backend=std::getenv("AP27_BACKEND");cpu_backend=backend && std::strcmp(backend,"cpu")==0;
-    if(!cpu_backend)active_v3d=std::make_unique<V3D>();
-    std::fprintf(stderr,"AP27 backend: %s\n",cpu_backend?"CPU reference":"V3D Vulkan");
+    active_v3d=std::make_unique<V3D>();
+    std::fprintf(stderr,"AP27 backend: V3D Vulkan\n");
 }
 void v3d_search_cleanup(){active_v3d.reset();}
 std::vector<APHit> search_ap27_k(unsigned K,unsigned start_shift,const uint64_t* n43,
                                 const std::function<void(double)>& tile_done){
-    if(!cpu_backend && !active_v3d)throw std::runtime_error("V3D not initialized");
+    if(!active_v3d)throw std::runtime_error("V3D not initialized");
     std::vector<APHit> hits;hits.reserve(256);
-    uint64_t step=uint64_t(K)*PRIM23,s59=residue(PRES8,K);
+    uint64_t step=uint64_t(K)*PRIM23;
     SeedData seeds=make_seed_offsets(K);
     constexpr uint32_t tiles_per_shift=(10840+SEEDS-1)/SEEDS;
     uint32_t completed=0;
-    const char* diagnostic_limit=std::getenv("AP27_DIAGNOSTIC_TILE_LIMIT");
-    uint32_t max_tiles=diagnostic_limit?uint32_t(std::strtoul(diagnostic_limit,nullptr,10)):0;
     // Restarts replay an interrupted K, so pairing does not change checkpoints.
-    const uint32_t shifts_per_tile=cpu_backend?1u:2u;
-    uint32_t dispatched_tiles=0;
-    for(uint32_t shift=start_shift;shift<start_shift+640;shift+=64*shifts_per_tile){
-        std::vector<U2> cpu_masks;
-        if(cpu_backend){
-            cpu_masks.resize(mask_count);
-            fill_masks(std::span<U2,mask_count>(cpu_masks.data(),mask_count),step,shift);
-        }else active_v3d->prepare_pair(step,shift);
+    for(uint32_t shift=start_shift;shift<start_shift+640;shift+=128){
+        active_v3d->prepare_pair(step,shift);
         for(uint32_t base=0;base<10840;base+=SEEDS){
             uint32_t count=std::min(SEEDS,10840u-base);
             fill_seed_tile(seeds,n43,base,count);
-            if(cpu_backend){
-                auto n59=generate_cpu(seeds,K,count);
-                auto records=sieve_cpu(n59,cpu_masks,s59);auto candidates=compact_cpu(records,shift);
-                for(auto n:candidates){auto o=check_candidate(n,step);if(o.flags&2u)hits.push_back({o.count,o.first});}
-            }else active_v3d->tile_pair(K,seeds,count,shift,hits);
-            completed+=shifts_per_tile;
+            active_v3d->tile_pair(K,seeds,count,shift,hits);
+            completed+=2;
             tile_done(double(completed)/double(10*tiles_per_shift));
-            if(max_tiles && ++dispatched_tiles>=max_tiles)throw std::runtime_error("diagnostic tile limit reached; no result committed");
         }
-        if(cpu_backend)std::fprintf(stderr,"K=%u shift=%u AP10+ hits=%zu\n",K,shift,hits.size());
-        else std::fprintf(stderr,"K=%u shifts=%u,%u AP10+ hits=%zu\n",K,shift,shift+64,hits.size());
+        std::fprintf(stderr,"K=%u shifts=%u,%u AP10+ hits=%zu\n",K,shift,shift+64,hits.size());
     }
     std::sort(hits.begin(),hits.end(),[](const APHit& a,const APHit& b){
         return a.first<b.first || (a.first==b.first && a.length<b.length);
