@@ -986,6 +986,12 @@ int main(
         interval_ns
     );
 
+    if (!enter_terminal_mode()) {
+        std::perror("enter terminal mode");
+        ::close(stats_fd);
+        return 1;
+    }
+
     while (!stop_requested) {
 
         while (!stop_requested) {
@@ -1072,6 +1078,7 @@ int main(
         );
     }
 
+    leave_terminal_mode();
     ::close(stats_fd);
 
     return 0;
