@@ -42,6 +42,11 @@ sudo systemctl start boinc-client.service
 
 The install target copies the payload to `WorkingDirectory/projects/www.primegrid.com`, with `app_info.xml` last. Check the service's `WorkingDirectory` with `systemctl show boinc-client -p WorkingDirectory` before installing; Check the event log after restarting. The template matches PrimeGrid `ap26` version 2.12 with plan class `cpu_AP27mt`; confirm that this matches the work units assigned to your client.
 
+Monitor GPU activity:
+```bash
+./v3d_smi 1
+```
+
 ## Useful BOINC commands
 
 To acquire new task:

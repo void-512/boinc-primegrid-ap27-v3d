@@ -69,6 +69,13 @@ target_include_directories(ap27_v3d PRIVATE "${PROJECT_SOURCE_DIR}/include" "${B
 target_link_libraries(ap27_v3d PRIVATE Vulkan::Vulkan BOINC::api BOINC::core)
 add_dependencies(ap27_v3d ap27_shaders)
 
+# Generate the V3D statistics monitor outside the BOINC payload, beside build/bin.
+add_executable(v3d_smi tools/v3d_smi.cpp)
+target_compile_features(v3d_smi PRIVATE cxx_std_17)
+set_target_properties(v3d_smi PROPERTIES
+    CXX_STANDARD 17 CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+
 # The default build assembles exactly the files used by the BOINC app version.
 configure_file(boinc/app_info.xml.in "${AP27_BIN_DIR}/app_info.xml" @ONLY)
 set(AP27_APP_INFO "${AP27_BIN_DIR}/app_info.xml")
@@ -97,7 +104,7 @@ foreach(notice_path IN ITEMS
         break()
     endif()
 endforeach()
-add_custom_target(ap27_payload ALL DEPENDS ap27_v3d ${AP27_RUNTIME_FILES} "${AP27_APP_INFO}")
+add_custom_target(ap27_payload ALL DEPENDS ap27_v3d v3d_smi ${AP27_RUNTIME_FILES} "${AP27_APP_INFO}")
 
 set(AP27_INSTALL_DIR "${BOINC_WORK_DIR}/projects/www.primegrid.com")
 install(TARGETS ap27_v3d RUNTIME DESTINATION "${AP27_INSTALL_DIR}")
