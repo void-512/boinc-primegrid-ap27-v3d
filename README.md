@@ -18,6 +18,10 @@ An AP27 search application for PrimeGrid's `ap26` BOINC work units. Its search a
 - Vulkan headers/loader and `glslc`.
 - BOINC application development headers and **shared** `libboinc_api` and `libboinc`. Set `-DBOINC_ROOT=/path/to/usr` if CMake cannot find them.
 
+## Environment Setup
+
+Refer to [boinc-setup.md](boinc-setup.md)
+
 ## Build
 
 ```bash
