@@ -97,7 +97,7 @@ Log in to the PrimeGrid website and open your **PrimeGrid preferences**.
 
 Under the application selection section:
 
-1. Enable **AP27**
+1. Enable **AP27**, select CPU
 2. Disable other PrimeGrid applications
 3. Disable:
 
