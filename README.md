@@ -1,6 +1,6 @@
 # AP27 on Raspberry Pi 5 V3D
 
-This is a pure vibe coding project under the help of `Codex`
+This is a vibe coding project under the help of `Codex`
 
 An AP27 search application for PrimeGrid's `ap26` BOINC work units. Its search and result format follow the AP26 application; the compute pipeline runs through Vulkan on Raspberry Pi 5 V3D 7.1.
 
