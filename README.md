@@ -24,6 +24,7 @@ An AP27 search application for PrimeGrid's `ap26` BOINC work units. Its search a
 git clone https://github.com/void-512/boinc-primegrid-ap27-v3d.git
 cd boinc-primegrid-ap27-v3d
 mkdir build && cd build
+cmake .. -DBOINC_WORK_DIR=$(systemctl show -p WorkingDirectory --value boinc-client)
 make -j6
 ```
 
@@ -36,9 +37,10 @@ Stop the BOINC client completely before replacing project files. BOINC checks ap
 ```bash
 sudo systemctl stop boinc-client.service
 sudo make install
+sudo systemctl start boinc-client.service
 ```
 
-The install target copies the payload to `/var/lib/boinc-client/projects/www.primegrid.com`, with `app_info.xml` last. Restart the client afterward and check its event log. The template matches PrimeGrid `ap26` version 2.12 with plan class `cpu_AP27mt`; confirm that this matches the work units assigned to your client.
+The install target copies the payload to `WorkingDirectory/projects/www.primegrid.com`, with `app_info.xml` last. Check the service's `WorkingDirectory` with `systemctl show boinc-client -p WorkingDirectory` before installing; Check the event log after restarting. The template matches PrimeGrid `ap26` version 2.12 with plan class `cpu_AP27mt`; confirm that this matches the work units assigned to your client.
 
 ## Standalone run
 

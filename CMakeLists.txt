@@ -1,4 +1,12 @@
 cmake_minimum_required(VERSION 3.31)
+
+set(BOINC_WORK_DIR "" CACHE PATH "Working directory of the BOINC client")
+if(BOINC_WORK_DIR STREQUAL "")
+    message(FATAL_ERROR
+        "BOINC_WORK_DIR is required; configure with -DBOINC_WORK_DIR=<BOINC working directory>.\n"
+        "Use: systemctl show -p WorkingDirectory --value boinc-client")
+endif()
+
 project(ap27_v3d LANGUAGES CXX)
 
 find_package(Vulkan REQUIRED)
@@ -91,7 +99,7 @@ foreach(notice_path IN ITEMS
 endforeach()
 add_custom_target(ap27_payload ALL DEPENDS ap27_v3d ${AP27_RUNTIME_FILES} "${AP27_APP_INFO}")
 
-set(AP27_INSTALL_DIR "/var/lib/boinc-client/projects/www.primegrid.com")
+set(AP27_INSTALL_DIR "${BOINC_WORK_DIR}/projects/www.primegrid.com")
 install(TARGETS ap27_v3d RUNTIME DESTINATION "${AP27_INSTALL_DIR}")
 install(FILES ${AP27_RUNTIME_FILES} DESTINATION "${AP27_INSTALL_DIR}")
 install(FILES "${AP27_APP_INFO}" DESTINATION "${AP27_INSTALL_DIR}")
