@@ -42,18 +42,6 @@ sudo systemctl start boinc-client.service
 
 The install target copies the payload to `WorkingDirectory/projects/www.primegrid.com`, with `app_info.xml` last. Check the service's `WorkingDirectory` with `systemctl show boinc-client -p WorkingDirectory` before installing; Check the event log after restarting. The template matches PrimeGrid `ap26` version 2.12 with plan class `cpu_AP27mt`; confirm that this matches the work units assigned to your client.
 
-## Standalone run
-
-Run from a writable work directory; the program writes `SOL-AP26.txt` and two `AP26-state.*.txt` checkpoint files there:
-
-```bash
-/path/to/build/bin/ap27_v3d KMIN KMAX SHIFT
-```
-
-The current implementation keeps one Vulkan device, mapped buffers, descriptor set, six pipelines, command buffer, and fence for the application's lifetime. It uses a 512-lane V3D sieve workgroup and advances residues for the first six small primes. Two adjacent shifts share `n59` generation, residue evolution, and one mask table. The first 48 sieve primes run in the main sieve shader; the remaining 35 run during GPU compaction on surviving records. One submission and fence wait are used per paired tile. Checkpoints keep the same format: an interrupted K is replayed, with that K's partial results rolled back.
-
-The checked-in `include/ap27_v3d/small_primes.hpp` table is the source for the specialized shader fragments. Run `python3 tools/gen_sieve.py` after changing that table, or `python3 tools/gen_sieve.py --check` to verify the generated fragments. The sieve record buffer holds intermediate survivors; `include/ap27_v3d/tile_layout.hpp` names its capacity, the candidate capacity, push constants, and control-buffer words used by the host.
-
 ## Useful BOINC commands
 
 To acquire new task:
@@ -86,3 +74,15 @@ To cancel a running task:
 ```bash
 boinccmd --task http://www.primegrid.com/ TASK_NAME abort
 ```
+
+## Standalone run
+
+Run from a writable work directory; the program writes `SOL-AP26.txt` and two `AP26-state.*.txt` checkpoint files there:
+
+```bash
+/path/to/build/bin/ap27_v3d KMIN KMAX SHIFT
+```
+
+The current implementation keeps one Vulkan device, mapped buffers, descriptor set, six pipelines, command buffer, and fence for the application's lifetime. It uses a 512-lane V3D sieve workgroup and advances residues for the first six small primes. Two adjacent shifts share `n59` generation, residue evolution, and one mask table. The first 48 sieve primes run in the main sieve shader; the remaining 35 run during GPU compaction on surviving records. One submission and fence wait are used per paired tile. Checkpoints keep the same format: an interrupted K is replayed, with that K's partial results rolled back.
+
+The checked-in `include/ap27_v3d/small_primes.hpp` table is the source for the specialized shader fragments. Run `python3 tools/gen_sieve.py` after changing that table, or `python3 tools/gen_sieve.py --check` to verify the generated fragments. The sieve record buffer holds intermediate survivors; `include/ap27_v3d/tile_layout.hpp` names its capacity, the candidate capacity, push constants, and control-buffer words used by the host.
