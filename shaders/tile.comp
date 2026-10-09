@@ -25,6 +25,10 @@ layout(std430,set=0,binding=6) buffer Control { uint c[]; } control_data;
 // First 32 primes: masks for shift and shift+64 share one aligned lookup.
 layout(std430,set=0,binding=7) readonly buffer PairedMasks { uvec4 m[]; } pair_data;
 #endif
+#if STAGE==5
+// Capacity equals candidate capacity: even every candidate being a hit fits.
+layout(std430,set=0,binding=8) buffer Hits { uvec4 h[]; } hit_data;
+#endif
 layout(push_constant) uniform Parameters {
     uvec4 values; // S59 low/high, STEP low/high
     uvec4 sizes;  // shift, n59 count, candidate capacity, early-record capacity
@@ -239,7 +243,9 @@ void main() {
         }
         first=add64(m,step);
         flags|=2u;
-        atomicAdd(control_data.c[AP_HIT_COUNT],1u);
+        uint slot=atomicAdd(control_data.c[AP_HIT_COUNT],1u);
+        if(slot<params.sizes.z) hit_data.h[slot]=uvec4(count,first,flags);
+        else atomicOr(control_data.c[ERROR_FLAGS],8u);
     }
     status_data.s[idx]=uvec4(count,first,flags);
 #endif

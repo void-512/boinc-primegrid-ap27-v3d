@@ -52,9 +52,11 @@ void fill_masks(std::span<U2,mask_count> masks,uint64_t step,uint32_t shift){
         uint32_t modp=MOD%p;
         for(uint32_t i=0;i<p;i++){
             uint64_t bits=0;
+            uint32_t r=(i+shift*modp)%p;
             for(uint32_t b=0;b<64;b++){
-                uint32_t r=(i+((b+shift)*modp))%p;
                 if(ok[r])bits|=1ULL<<b;
+                r+=modp;
+                if(r>=p)r-=p;
             }
             masks[prime.offset+i]=split(bits);
         }
@@ -100,8 +102,13 @@ struct V3D {
     VkInstance instance{}; VkDevice dev{}; VkQueue queue{}; VkPhysicalDevice gpu{};
     VkDescriptorSetLayout dsl{}; VkPipelineLayout layout{}; VkDescriptorPool pool{};
     VkDescriptorSet set{}; VkCommandPool command_pool{}; VkCommandBuffer cb{}; VkFence fence{};
-    std::array<Buffer,8> b{}; std::array<VkShaderModule,8> modules{};
+    std::array<Buffer,9> b{}; std::array<VkShaderModule,8> modules{};
     std::array<VkPipeline,8> pipelines{};
+    // One in-flight tile: seeds/control change in mapped buffers; commands only
+    // depend on K, shift and seed count (including the final partial tile).
+    std::array<uint32_t,3> recorded_key{};
+    std::array<U2,mask_count> base_masks{};
+    uint64_t mask_step=0;
     V3D(){
       try {
         VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO}; app.apiVersion=VK_API_VERSION_1_2; app.pApplicationName="AP27 BOINC V3D";
@@ -119,23 +126,24 @@ struct V3D {
         float priority=1;VkDeviceQueueCreateInfo qc{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};qc.queueFamilyIndex=family;qc.queueCount=1;qc.pQueuePriorities=&priority;
         VkDeviceCreateInfo dc{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};dc.queueCreateInfoCount=1;dc.pQueueCreateInfos=&qc;
         check(vkCreateDevice(gpu,&dc,nullptr,&dev),"device");vkGetDeviceQueue(dev,family,0,&queue);
-        constexpr std::array<VkDeviceSize,8> sizes={sizeof(SeedData),sizeof(U2)*N59_COUNT,
+        constexpr std::array<VkDeviceSize,9> sizes={sizeof(SeedData),sizeof(U2)*N59_COUNT,
             sizeof(U2)*mask_count,sizeof(U4)*ap27_v3d::EARLY_RECORD_CAPACITY,
             sizeof(U2)*ap27_v3d::CANDIDATE_CAPACITY,
-            sizeof(U4)*ap27_v3d::INTERMEDIATE_RECORD_CAPACITY,64,sizeof(U4)*FIRST_MASK_COUNT};
+            sizeof(U4)*ap27_v3d::INTERMEDIATE_RECORD_CAPACITY,64,sizeof(U4)*FIRST_MASK_COUNT,
+            sizeof(U4)*ap27_v3d::CANDIDATE_CAPACITY};
         for(size_t i=0;i<b.size();++i)
             b[i]=make_buffer(dev,gpu,sizes[i],i==6?VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT:0);
-        VkDescriptorSetLayoutBinding lb[8]{};for(uint32_t i=0;i<b.size();i++){lb[i].binding=i;lb[i].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;lb[i].descriptorCount=1;lb[i].stageFlags=VK_SHADER_STAGE_COMPUTE_BIT;}
+        VkDescriptorSetLayoutBinding lb[9]{};for(uint32_t i=0;i<b.size();i++){lb[i].binding=i;lb[i].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;lb[i].descriptorCount=1;lb[i].stageFlags=VK_SHADER_STAGE_COMPUTE_BIT;}
         VkDescriptorSetLayoutCreateInfo lc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};lc.bindingCount=b.size();lc.pBindings=lb;
         check(vkCreateDescriptorSetLayout(dev,&lc,nullptr,&dsl),"descriptor layout");
         VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(ap27_v3d::PushConstants)};
         VkPipelineLayoutCreateInfo pc{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};pc.setLayoutCount=1;pc.pSetLayouts=&dsl;pc.pushConstantRangeCount=1;pc.pPushConstantRanges=&range;
         check(vkCreatePipelineLayout(dev,&pc,nullptr,&layout),"pipeline layout");
-        VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,8};VkDescriptorPoolCreateInfo dpc{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};dpc.maxSets=1;dpc.poolSizeCount=1;dpc.pPoolSizes=&ps;
+        VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,9};VkDescriptorPoolCreateInfo dpc{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};dpc.maxSets=1;dpc.poolSizeCount=1;dpc.pPoolSizes=&ps;
         check(vkCreateDescriptorPool(dev,&dpc,nullptr,&pool),"descriptor pool");
         VkDescriptorSetAllocateInfo da{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};da.descriptorPool=pool;da.descriptorSetCount=1;da.pSetLayouts=&dsl;
         check(vkAllocateDescriptorSets(dev,&da,&set),"descriptor set");
-        VkDescriptorBufferInfo info[8]{};VkWriteDescriptorSet writes[8]{};
+        VkDescriptorBufferInfo info[9]{};VkWriteDescriptorSet writes[9]{};
         for(uint32_t i=0;i<b.size();i++){info[i]={b[i].b,0,VK_WHOLE_SIZE};writes[i].sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;writes[i].dstSet=set;writes[i].dstBinding=i;writes[i].descriptorCount=1;writes[i].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;writes[i].pBufferInfo=&info[i];}
         vkUpdateDescriptorSets(dev,b.size(),writes,0,nullptr);
         char path[4096];ssize_t n=readlink("/proc/self/exe",path,sizeof(path)-1);
@@ -167,7 +175,17 @@ struct V3D {
     }
     void prepare_pair(uint64_t step,uint32_t shift){
         auto masks=std::span<U2,mask_count>(static_cast<U2*>(b[2].ptr),mask_count);
-        fill_masks(masks,step,shift);
+        // For a fixed K, shift only rotates each prime's mask table.
+        if(mask_step!=step) {
+            fill_masks(base_masks,step,0);
+            mask_step=step;
+        }
+        for(const auto& prime:small_primes) {
+            uint32_t rotation=(uint64_t(shift)*(MOD%prime.p))%prime.p;
+            const U2* base=base_masks.data()+prime.offset;
+            std::copy_n(base+rotation,prime.p-rotation,masks.data()+prime.offset);
+            std::copy_n(base,rotation,masks.data()+prime.offset+prime.p-rotation);
+        }
         // The first 32 primes fetch both shifts in one aligned 16-byte lookup.
         auto* pairs=static_cast<U4*>(b[7].ptr);
         for(uint32_t pi=0;pi<ap27_v3d::FIRST_STAGE_PRIME_COUNT;pi++){
@@ -180,10 +198,8 @@ struct V3D {
             }
         }
     }
-    void tile_pair(uint32_t K,const SeedData& seeds,uint32_t count,uint32_t shift,std::vector<APHit>& hits){
-        std::memcpy(b[0].ptr,&seeds,sizeof(seeds));
+    void record_pair(uint32_t K,uint32_t count,uint32_t shift){
         uint64_t step=uint64_t(K)*PRIM23;
-        std::memset(b[6].ptr,0,b[6].size);
         uint64_t s59=residue(PRES8,K);uint32_t n59=count*PER_SEED;
         ap27_v3d::PushConstants push{uint32_t(s59),uint32_t(s59>>32),uint32_t(step),uint32_t(step>>32),
                                      shift,n59,ap27_v3d::CANDIDATE_CAPACITY,
@@ -205,7 +221,17 @@ struct V3D {
             VkPipelineStageFlags dst=stage==5?VK_PIPELINE_STAGE_HOST_BIT:(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT|VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT);
             vkCmdPipelineBarrier(cb,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,dst,0,1,&barrier,0,nullptr,0,nullptr);
         }
-        check(vkEndCommandBuffer(cb),"end command buffer");check(vkResetFences(dev,1,&fence),"reset fence");
+        check(vkEndCommandBuffer(cb),"end command buffer");
+    }
+    void tile_pair(uint32_t K,const SeedData& seeds,uint32_t count,uint32_t shift,std::vector<APHit>& hits){
+        std::memcpy(b[0].ptr,&seeds,sizeof(seeds));
+        std::memset(b[6].ptr,0,b[6].size);
+        const std::array<uint32_t,3> key{K,count,shift};
+        if(recorded_key!=key) {
+            record_pair(K,count,shift);
+            recorded_key=key;
+        }
+        check(vkResetFences(dev,1,&fence),"reset fence");
         VkSubmitInfo sub{VK_STRUCTURE_TYPE_SUBMIT_INFO};sub.commandBufferCount=1;sub.pCommandBuffers=&cb;
         check(vkQueueSubmit(queue,1,&sub,fence),"queue submit");
         check(vkWaitForFences(dev,1,&fence,VK_TRUE,300000000000ULL),"wait tile fence");
@@ -217,11 +243,17 @@ struct V3D {
            control[ap27_v3d::FINAL_RECORD_COUNT_WORD]>
                control[ap27_v3d::INTERMEDIATE_RECORD_COUNT_WORD])
             throw std::runtime_error("V3D output overflow or invalid PRP arithmetic");
-        const U4* status=static_cast<const U4*>(b[5].ptr);
-        uint32_t observed_hits=0;
-        for(uint32_t i=0;i<control[ap27_v3d::CANDIDATE_COUNT_WORD];i++)if(status[i].w&2u)
-            { hits.push_back({status[i].x,pack(status[i].y,status[i].z)}); observed_hits++; }
-        if(observed_hits!=control[ap27_v3d::AP_HIT_COUNT_WORD])throw std::runtime_error("V3D hit count mismatch");
+        // The PRP stage appends only AP10+ hits. Full per-candidate statuses
+        // remain available for the oracle, but production never scans them.
+        uint32_t hit_count=control[ap27_v3d::AP_HIT_COUNT_WORD];
+        if(hit_count>control[ap27_v3d::CANDIDATE_COUNT_WORD])
+            throw std::runtime_error("V3D hit count overflow");
+        const U4* results=static_cast<const U4*>(b[8].ptr);
+        for(uint32_t i=0;i<hit_count;i++) {
+            if(!(results[i].w&2u) || results[i].x<10u)
+                throw std::runtime_error("V3D invalid hit record");
+            hits.push_back({results[i].x,pack(results[i].y,results[i].z)});
+        }
     }
 };
 
