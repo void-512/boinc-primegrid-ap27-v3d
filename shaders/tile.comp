@@ -21,6 +21,10 @@ layout(std430,set=0,binding=4) buffer Candidates { uvec2 n[]; } candidate_data;
 // Middle survivors occupy this buffer until the PRP stage.
 layout(std430,set=0,binding=5) buffer Statuses { uvec4 s[]; } status_data;
 layout(std430,set=0,binding=6) buffer Control { uint c[]; } control_data;
+#if STAGE==1
+// First 32 primes: masks for shift and shift+64 share one aligned lookup.
+layout(std430,set=0,binding=7) readonly buffer PairedMasks { uvec4 m[]; } pair_data;
+#endif
 layout(push_constant) uniform Parameters {
     uvec4 values; // S59 low/high, STEP low/high
     uvec4 sizes;  // shift, n59 count, candidate capacity, early-record capacity
@@ -113,35 +117,12 @@ void main() {
     uint r79=(a+52u*b)%79u, d79=(sa+52u*sb)%79u;
     uint r83=(a+40u*b)%83u, d83=(sa+40u*sb)%83u;
     for(uint iter=0u;iter<35u;iter++) {
-        // The second shift's row is the first row advanced by 64*MOD mod p.
-        uint rot61=r61+7u;
-        if(rot61>=61u)rot61-=61u;
-        uvec4 bits=uvec4(mask_data.m[r61],mask_data.m[rot61]);
-        uint index67=61u+r67;
-        bits.xy&=mask_data.m[index67];
-        uint rot67=r67+57u;
-        if(rot67>=67u)rot67-=67u;
-        bits.zw&=mask_data.m[61u+rot67];
-        uint index71=128u+r71;
-        bits.xy&=mask_data.m[index71];
-        uint rot71=r71+53u;
-        if(rot71>=71u)rot71-=71u;
-        bits.zw&=mask_data.m[128u+rot71];
-        uint index73=199u+r73;
-        bits.xy&=mask_data.m[index73];
-        uint rot73=r73+34u;
-        if(rot73>=73u)rot73-=73u;
-        bits.zw&=mask_data.m[199u+rot73];
-        uint index79=272u+r79;
-        bits.xy&=mask_data.m[index79];
-        uint rot79=r79+1u;
-        if(rot79>=79u)rot79-=79u;
-        bits.zw&=mask_data.m[272u+rot79];
-        uint index83=351u+r83;
-        bits.xy&=mask_data.m[index83];
-        uint rot83=r83+24u;
-        if(rot83>=83u)rot83-=83u;
-        bits.zw&=mask_data.m[351u+rot83];
+        uvec4 bits=pair_data.m[r61];
+        bits &= pair_data.m[61u+r67];
+        bits &= pair_data.m[128u+r71];
+        bits &= pair_data.m[199u+r73];
+        bits &= pair_data.m[272u+r79];
+        bits &= pair_data.m[351u+r83];
         if((bits.x|bits.y|bits.z|bits.w)!=0u) {
             a=n.x&0x3fffffffu;
             b=(n.x>>30)|(n.y<<2);

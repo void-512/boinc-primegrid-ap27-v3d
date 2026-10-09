@@ -19,6 +19,8 @@ static constexpr uint64_t MOD=258559632607830ULL;
 static constexpr uint64_t PRIM23=223092870ULL;
 static constexpr uint32_t SEEDS=32, PER_SEED=12673;
 static constexpr uint32_t N59_COUNT=SEEDS*PER_SEED;
+static constexpr auto LAST_EARLY_PRIME=small_primes[ap27_v3d::FIRST_STAGE_PRIME_COUNT-1];
+static constexpr uint32_t FIRST_MASK_COUNT=LAST_EARLY_PRIME.offset+LAST_EARLY_PRIME.p;
 static_assert(MOD < ap27_v3d::SECOND_SHIFT_RECORD_TAG);
 static constexpr uint64_t PRES5=126273308948010ULL;
 static constexpr uint64_t PRES6=115526644356690ULL, PRES7=48784836341100ULL;
@@ -98,7 +100,7 @@ struct V3D {
     VkInstance instance{}; VkDevice dev{}; VkQueue queue{}; VkPhysicalDevice gpu{};
     VkDescriptorSetLayout dsl{}; VkPipelineLayout layout{}; VkDescriptorPool pool{};
     VkDescriptorSet set{}; VkCommandPool command_pool{}; VkCommandBuffer cb{}; VkFence fence{};
-    std::array<Buffer,7> b{}; std::array<VkShaderModule,8> modules{};
+    std::array<Buffer,8> b{}; std::array<VkShaderModule,8> modules{};
     std::array<VkPipeline,8> pipelines{};
     V3D(){
       try {
@@ -117,25 +119,25 @@ struct V3D {
         float priority=1;VkDeviceQueueCreateInfo qc{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};qc.queueFamilyIndex=family;qc.queueCount=1;qc.pQueuePriorities=&priority;
         VkDeviceCreateInfo dc{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};dc.queueCreateInfoCount=1;dc.pQueueCreateInfos=&qc;
         check(vkCreateDevice(gpu,&dc,nullptr,&dev),"device");vkGetDeviceQueue(dev,family,0,&queue);
-        constexpr std::array<VkDeviceSize,7> sizes={sizeof(SeedData),sizeof(U2)*N59_COUNT,
+        constexpr std::array<VkDeviceSize,8> sizes={sizeof(SeedData),sizeof(U2)*N59_COUNT,
             sizeof(U2)*mask_count,sizeof(U4)*ap27_v3d::EARLY_RECORD_CAPACITY,
             sizeof(U2)*ap27_v3d::CANDIDATE_CAPACITY,
-            sizeof(U4)*ap27_v3d::INTERMEDIATE_RECORD_CAPACITY,64};
+            sizeof(U4)*ap27_v3d::INTERMEDIATE_RECORD_CAPACITY,64,sizeof(U4)*FIRST_MASK_COUNT};
         for(size_t i=0;i<b.size();++i)
             b[i]=make_buffer(dev,gpu,sizes[i],i==6?VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT:0);
-        VkDescriptorSetLayoutBinding lb[7]{};for(uint32_t i=0;i<7;i++){lb[i].binding=i;lb[i].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;lb[i].descriptorCount=1;lb[i].stageFlags=VK_SHADER_STAGE_COMPUTE_BIT;}
-        VkDescriptorSetLayoutCreateInfo lc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};lc.bindingCount=7;lc.pBindings=lb;
+        VkDescriptorSetLayoutBinding lb[8]{};for(uint32_t i=0;i<b.size();i++){lb[i].binding=i;lb[i].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;lb[i].descriptorCount=1;lb[i].stageFlags=VK_SHADER_STAGE_COMPUTE_BIT;}
+        VkDescriptorSetLayoutCreateInfo lc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};lc.bindingCount=b.size();lc.pBindings=lb;
         check(vkCreateDescriptorSetLayout(dev,&lc,nullptr,&dsl),"descriptor layout");
         VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(ap27_v3d::PushConstants)};
         VkPipelineLayoutCreateInfo pc{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};pc.setLayoutCount=1;pc.pSetLayouts=&dsl;pc.pushConstantRangeCount=1;pc.pPushConstantRanges=&range;
         check(vkCreatePipelineLayout(dev,&pc,nullptr,&layout),"pipeline layout");
-        VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,7};VkDescriptorPoolCreateInfo dpc{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};dpc.maxSets=1;dpc.poolSizeCount=1;dpc.pPoolSizes=&ps;
+        VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,8};VkDescriptorPoolCreateInfo dpc{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};dpc.maxSets=1;dpc.poolSizeCount=1;dpc.pPoolSizes=&ps;
         check(vkCreateDescriptorPool(dev,&dpc,nullptr,&pool),"descriptor pool");
         VkDescriptorSetAllocateInfo da{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};da.descriptorPool=pool;da.descriptorSetCount=1;da.pSetLayouts=&dsl;
         check(vkAllocateDescriptorSets(dev,&da,&set),"descriptor set");
-        VkDescriptorBufferInfo info[7]{};VkWriteDescriptorSet writes[7]{};
-        for(uint32_t i=0;i<7;i++){info[i]={b[i].b,0,VK_WHOLE_SIZE};writes[i].sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;writes[i].dstSet=set;writes[i].dstBinding=i;writes[i].descriptorCount=1;writes[i].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;writes[i].pBufferInfo=&info[i];}
-        vkUpdateDescriptorSets(dev,7,writes,0,nullptr);
+        VkDescriptorBufferInfo info[8]{};VkWriteDescriptorSet writes[8]{};
+        for(uint32_t i=0;i<b.size();i++){info[i]={b[i].b,0,VK_WHOLE_SIZE};writes[i].sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;writes[i].dstSet=set;writes[i].dstBinding=i;writes[i].descriptorCount=1;writes[i].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;writes[i].pBufferInfo=&info[i];}
+        vkUpdateDescriptorSets(dev,b.size(),writes,0,nullptr);
         char path[4096];ssize_t n=readlink("/proc/self/exe",path,sizeof(path)-1);
         if(n<0)throw std::runtime_error("cannot locate shader directory");path[n]=0;
         std::string dir(path);dir.resize(dir.find_last_of('/'));
@@ -164,8 +166,19 @@ struct V3D {
         if(dev)vkDestroyDevice(dev,nullptr);if(instance)vkDestroyInstance(instance,nullptr);
     }
     void prepare_pair(uint64_t step,uint32_t shift){
-        // The shader rotates each prime's row by 64*MOD mod p for shift+64.
-        fill_masks(std::span<U2,mask_count>(static_cast<U2*>(b[2].ptr),mask_count),step,shift);
+        auto masks=std::span<U2,mask_count>(static_cast<U2*>(b[2].ptr),mask_count);
+        fill_masks(masks,step,shift);
+        // The first 32 primes fetch both shifts in one aligned 16-byte lookup.
+        auto* pairs=static_cast<U4*>(b[7].ptr);
+        for(uint32_t pi=0;pi<ap27_v3d::FIRST_STAGE_PRIME_COUNT;pi++){
+            auto prime=small_primes[pi];
+            const uint32_t rotation=(64*MOD)%prime.p;
+            for(uint32_t i=0;i<prime.p;i++){
+                auto a=masks[prime.offset+i];
+                auto other=masks[prime.offset+(i+rotation)%prime.p];
+                pairs[prime.offset+i]={a.lo,a.hi,other.lo,other.hi};
+            }
+        }
     }
     void tile_pair(uint32_t K,const SeedData& seeds,uint32_t count,uint32_t shift,std::vector<APHit>& hits){
         std::memcpy(b[0].ptr,&seeds,sizeof(seeds));

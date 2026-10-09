@@ -4,6 +4,8 @@
 
 namespace ap27_v3d {
 
+// Must match FIRST_STAGE_PRIMES in tools/gen_sieve.py.
+inline constexpr uint32_t FIRST_STAGE_PRIME_COUNT = 32;
 inline constexpr uint32_t CANDIDATE_CAPACITY = 1'000'000;
 inline constexpr uint32_t EARLY_RECORD_CAPACITY = 6'000'000;
 inline constexpr uint32_t INTERMEDIATE_RECORD_CAPACITY = 1'000'000;

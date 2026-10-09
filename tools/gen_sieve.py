@@ -43,14 +43,9 @@ def first_stage_fragment(primes):
     ]
     for i in range(FIRST_INLINE_PRIMES, FIRST_STAGE_PRIMES):
         prime, coefficient, offset = primes[i]
-        end = offset + prime
-        rotation = (64 * MOD) % prime
         lines.extend([
             f"    uint index{i}=(a+{coefficient}u*b)%{prime}u+{offset}u;",
-            f"    m.xy &= mask_data.m[index{i}];",
-            f"    uint rotated{i}=index{i}+{rotation}u;",
-            f"    if(rotated{i}>={end}u)rotated{i}-={prime}u;",
-            f"    m.zw &= mask_data.m[rotated{i}];",
+            f"    m &= pair_data.m[index{i}];",
         ])
         if (i + 1) % 5 == 0:
             lines.append("    if((m.x|m.y|m.z|m.w)==0u) return m;")
@@ -83,6 +78,10 @@ def main():
     parser.add_argument("--check", action="store_true",
                         help="verify generated shaders match the checked-in files")
     args = parser.parse_args()
+    layout = (ROOT / "include/ap27_v3d/tile_layout.hpp").read_text()
+    count = re.search(r"FIRST_STAGE_PRIME_COUNT\s*=\s*(\d+)", layout)
+    if count is None or int(count[1]) != FIRST_STAGE_PRIMES:
+        raise ValueError("host paired-mask extent does not match the first sieve stage")
     primes = read_primes()
     outputs = {
         ROOT / "shaders/sieve_masks_early.glsl": first_stage_fragment(primes),
