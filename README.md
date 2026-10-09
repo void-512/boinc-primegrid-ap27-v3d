@@ -32,7 +32,7 @@ cmake .. -DBOINC_WORK_DIR=$(systemctl show -p WorkingDirectory --value boinc-cli
 make -j6
 ```
 
-The default build creates the complete BOINC payload in `build/bin/`: `ap27_v3d`, six SPIR-V files, the required BOINC shared libraries, `app_info.xml`, and the BOINC copyright notice when available. The shader source is in `shaders/`; the host code is in `src/`.
+The default build creates the complete BOINC payload in `build/bin/`: `ap27_v3d`, eight SPIR-V files, the required BOINC shared libraries, `app_info.xml`, and the BOINC copyright notice when available. The shader source is in `shaders/`; the host code is in `src/`.
 
 ## Install
 
@@ -92,6 +92,6 @@ Run from a writable work directory; the program writes `SOL-AP26.txt` and two `A
 /path/to/build/bin/ap27_v3d KMIN KMAX SHIFT
 ```
 
-The current implementation keeps one Vulkan device, mapped buffers, descriptor set, six pipelines, command buffer, and fence for the application's lifetime. It uses a 512-lane V3D sieve workgroup and advances residues for the first six small primes. Two adjacent shifts share `n59` generation, residue evolution, and one mask table. The first 48 sieve primes run in the main sieve shader; the remaining 35 run during GPU compaction on surviving records. One submission and fence wait are used per paired tile. Checkpoints keep the same format: an interrupted K is replayed, with that K's partial results rolled back.
+The current implementation keeps one Vulkan device, mapped buffers, descriptor set, eight pipelines, command buffer, and fence for the application's lifetime. It uses a 512-lane V3D sieve workgroup and advances residues for the first six small primes. Two adjacent shifts share `n59` generation, residue evolution, and one mask table. A fixed 32/24/27-prime sieve runs early primes, middle filtering, then late primes with compaction. Middle survivors reuse the status buffer before probable-prime checking. The early record buffer holds six million 16-byte records; middle survivors and candidates each have a one-million-record limit. Large middle-stage dispatches use two dimensions within V3D's workgroup limits. One submission and fence wait are used per paired tile. Checkpoints keep the same format: an interrupted K is replayed, with that K's partial results rolled back.
 
 The checked-in `include/ap27_v3d/small_primes.hpp` table is the source for the specialized shader fragments. Run `python3 tools/gen_sieve.py` after changing that table, or `python3 tools/gen_sieve.py --check` to verify the generated fragments. The sieve record buffer holds intermediate survivors; `include/ap27_v3d/tile_layout.hpp` names its capacity, the candidate capacity, push constants, and control-buffer words used by the host.

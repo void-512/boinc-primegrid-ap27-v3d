@@ -18,11 +18,12 @@ layout(std430,set=0,binding=2) readonly buffer Masks { uvec2 m[]; } mask_data;
 // Each record holds a 64-bit residue and mask; bit 48 of the residue tags shift +64.
 layout(std430,set=0,binding=3) buffer SieveRecords { uvec4 r[]; } sieve_data;
 layout(std430,set=0,binding=4) buffer Candidates { uvec2 n[]; } candidate_data;
+// Middle survivors occupy this buffer until the PRP stage.
 layout(std430,set=0,binding=5) buffer Statuses { uvec4 s[]; } status_data;
 layout(std430,set=0,binding=6) buffer Control { uint c[]; } control_data;
 layout(push_constant) uniform Parameters {
     uvec4 values; // S59 low/high, STEP low/high
-    uvec4 sizes;  // shift, n59 count, candidate capacity, sieve-record capacity
+    uvec4 sizes;  // shift, n59 count, candidate capacity, early-record capacity
 } params;
 
 const uvec2 MOD=uvec2(2601388630u,60200u);
@@ -35,6 +36,8 @@ const uint AP_HIT_COUNT=3u;
 const uint SIEVE_DISPATCH=4u; // Three control words for vkCmdDispatchIndirect.
 const uint CHECK_DISPATCH=8u;
 const uint FINAL_SIEVE_RECORD_COUNT=12u;
+const uint MIDDLE_RECORD_COUNT=13u;
+const uint EARLY_RECORD_COUNT=14u;
 
 #if STAGE==1
 #include "sieve_masks_early.glsl"
@@ -48,6 +51,9 @@ uint advance_residue(uint r, uint stride_r, uint p, uint mod_r, bool wrapped) {
 #endif
 #if STAGE==3
 #include "sieve_masks_late.glsl"
+#endif
+#if STAGE==6
+#include "sieve_masks_middle.glsl"
 #endif
 
 uvec2 residue_add(uvec2 a,uvec2 b) {
@@ -76,6 +82,9 @@ void compact_bit(uvec2 base,uint bit,uint shift) {
 }
 void main() {
     uint idx=gl_GlobalInvocationID.x;
+#if STAGE==6
+    idx+=gl_GlobalInvocationID.y*(gl_NumWorkGroups.x*64u);
+#endif
 #if STAGE==0
     if(idx>=params.sizes.y) return;
     uint seed=idx/12673u;
@@ -96,7 +105,7 @@ void main() {
     uint b=(n.x>>30)|(n.y<<2);
     uint sa=stride.x&0x3fffffffu;
     uint sb=(stride.x>>30)|(stride.y<<2);
-    // The first six primes use advancing residues; the generated fragment handles primes 7-48.
+    // The first six primes use advancing residues; the generated fragment handles primes 7-32.
     uint r61=(a+60u*b)%61u, d61=(sa+60u*sb)%61u;
     uint r67=(a+25u*b)%67u, d67=(sa+25u*sb)%67u;
     uint r71=(a+20u*b)%71u, d71=(sa+20u*sb)%71u;
@@ -161,11 +170,15 @@ void main() {
     }
 #elif STAGE==2
     if(idx!=0u) return;
-    control_data.c[SIEVE_DISPATCH]=(min(control_data.c[INTERMEDIATE_RECORD_COUNT],params.sizes.w)+63u)/64u;
-    control_data.c[SIEVE_DISPATCH+1u]=1u; control_data.c[SIEVE_DISPATCH+2u]=1u;
+    // Keep both dispatch dimensions within V3D's 65535-workgroup limit.
+    uint groups=(min(control_data.c[INTERMEDIATE_RECORD_COUNT],params.sizes.w)+63u)/64u;
+    bool two_rows=groups>65535u;
+    control_data.c[SIEVE_DISPATCH]=two_rows ? (groups+1u)/2u : groups;
+    control_data.c[SIEVE_DISPATCH+1u]=two_rows ? 2u : 1u;
+    control_data.c[SIEVE_DISPATCH+2u]=1u;
 #elif STAGE==3
-    if(idx>=min(control_data.c[INTERMEDIATE_RECORD_COUNT],params.sizes.w)) return;
-    uvec4 intermediate_record=sieve_data.r[idx];
+    if(idx>=min(control_data.c[INTERMEDIATE_RECORD_COUNT],uint(status_data.s.length()))) return;
+    uvec4 intermediate_record=status_data.s[idx];
     uvec2 base=intermediate_record.xy;
     bool second_shift=(base.y&SECOND_SHIFT_TAG)!=0u;
     uint shift=params.sizes.x+(second_shift ? PAIRED_SHIFT_OFFSET : 0u);
@@ -186,6 +199,24 @@ void main() {
         compact_bit(base,bit,shift);
         bits&=bits-1u;
     }
+#elif STAGE==6
+    if(idx>=min(control_data.c[INTERMEDIATE_RECORD_COUNT],params.sizes.w)) return;
+    uvec4 record=sieve_data.r[idx];
+    uvec2 base=record.xy;
+    bool second_shift=(base.y&SECOND_SHIFT_TAG)!=0u;
+    base.y&=~SECOND_SHIFT_TAG;
+    uvec2 middle_mask=apply_middle_prime_masks(base.x&0x3fffffffu,(base.x>>30)|(base.y<<2),record.zw,second_shift);
+    if((middle_mask.x|middle_mask.y)!=0u) {
+        uint slot=atomicAdd(control_data.c[MIDDLE_RECORD_COUNT],1u);
+        if(slot<uint(status_data.s.length())) status_data.s[slot]=uvec4(record.xy,middle_mask);
+        else atomicOr(control_data.c[ERROR_FLAGS],1u);
+    }
+#elif STAGE==7
+    if(idx!=0u) return;
+    control_data.c[EARLY_RECORD_COUNT]=control_data.c[INTERMEDIATE_RECORD_COUNT];
+    control_data.c[INTERMEDIATE_RECORD_COUNT]=control_data.c[MIDDLE_RECORD_COUNT];
+    control_data.c[SIEVE_DISPATCH]=(min(control_data.c[MIDDLE_RECORD_COUNT],uint(status_data.s.length()))+63u)/64u;
+    control_data.c[SIEVE_DISPATCH+1u]=1u; control_data.c[SIEVE_DISPATCH+2u]=1u;
 #elif STAGE==4
     if(idx!=0u) return;
     control_data.c[CHECK_DISPATCH]=(min(control_data.c[CANDIDATE_COUNT],params.sizes.z)+63u)/64u;

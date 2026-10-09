@@ -98,8 +98,8 @@ struct V3D {
     VkInstance instance{}; VkDevice dev{}; VkQueue queue{}; VkPhysicalDevice gpu{};
     VkDescriptorSetLayout dsl{}; VkPipelineLayout layout{}; VkDescriptorPool pool{};
     VkDescriptorSet set{}; VkCommandPool command_pool{}; VkCommandBuffer cb{}; VkFence fence{};
-    std::array<Buffer,7> b{}; std::array<VkShaderModule,6> modules{};
-    std::array<VkPipeline,6> pipelines{};
+    std::array<Buffer,7> b{}; std::array<VkShaderModule,8> modules{};
+    std::array<VkPipeline,8> pipelines{};
     V3D(){
       try {
         VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO}; app.apiVersion=VK_API_VERSION_1_2; app.pApplicationName="AP27 BOINC V3D";
@@ -118,9 +118,9 @@ struct V3D {
         VkDeviceCreateInfo dc{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};dc.queueCreateInfoCount=1;dc.pQueueCreateInfos=&qc;
         check(vkCreateDevice(gpu,&dc,nullptr,&dev),"device");vkGetDeviceQueue(dev,family,0,&queue);
         constexpr std::array<VkDeviceSize,7> sizes={sizeof(SeedData),sizeof(U2)*N59_COUNT,
-            sizeof(U2)*mask_count,sizeof(U4)*ap27_v3d::INTERMEDIATE_RECORD_CAPACITY,
+            sizeof(U2)*mask_count,sizeof(U4)*ap27_v3d::EARLY_RECORD_CAPACITY,
             sizeof(U2)*ap27_v3d::CANDIDATE_CAPACITY,
-            sizeof(U4)*ap27_v3d::CANDIDATE_CAPACITY,64};
+            sizeof(U4)*ap27_v3d::INTERMEDIATE_RECORD_CAPACITY,64};
         for(size_t i=0;i<b.size();++i)
             b[i]=make_buffer(dev,gpu,sizes[i],i==6?VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT:0);
         VkDescriptorSetLayoutBinding lb[7]{};for(uint32_t i=0;i<7;i++){lb[i].binding=i;lb[i].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;lb[i].descriptorCount=1;lb[i].stageFlags=VK_SHADER_STAGE_COMPUTE_BIT;}
@@ -139,7 +139,7 @@ struct V3D {
         char path[4096];ssize_t n=readlink("/proc/self/exe",path,sizeof(path)-1);
         if(n<0)throw std::runtime_error("cannot locate shader directory");path[n]=0;
         std::string dir(path);dir.resize(dir.find_last_of('/'));
-        for(int i=0;i<6;i++){
+        for(int i=0;i<8;i++){
             auto words=read_spirv(dir+"/stage_"+std::to_string(i)+".spv");
             VkShaderModuleCreateInfo sm{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};sm.codeSize=words.size()*4;sm.pCode=words.data();
             check(vkCreateShaderModule(dev,&sm,nullptr,&modules[i]),"shader module");
@@ -158,7 +158,7 @@ struct V3D {
     void destroy_all() noexcept {
         if(dev)vkDeviceWaitIdle(dev);
         if(fence)vkDestroyFence(dev,fence,nullptr);if(command_pool)vkDestroyCommandPool(dev,command_pool,nullptr);
-        for(int i=0;i<6;i++){if(pipelines[i])vkDestroyPipeline(dev,pipelines[i],nullptr);if(modules[i])vkDestroyShaderModule(dev,modules[i],nullptr);}
+        for(int i=0;i<8;i++){if(pipelines[i])vkDestroyPipeline(dev,pipelines[i],nullptr);if(modules[i])vkDestroyShaderModule(dev,modules[i],nullptr);}
         if(pool)vkDestroyDescriptorPool(dev,pool,nullptr);if(layout)vkDestroyPipelineLayout(dev,layout,nullptr);if(dsl)vkDestroyDescriptorSetLayout(dev,dsl,nullptr);
         for(auto& x:b)if(x.b)destroy(dev,x);
         if(dev)vkDestroyDevice(dev,nullptr);if(instance)vkDestroyInstance(instance,nullptr);
@@ -174,18 +174,19 @@ struct V3D {
         uint64_t s59=residue(PRES8,K);uint32_t n59=count*PER_SEED;
         ap27_v3d::PushConstants push{uint32_t(s59),uint32_t(s59>>32),uint32_t(step),uint32_t(step>>32),
                                      shift,n59,ap27_v3d::CANDIDATE_CAPACITY,
-                                     ap27_v3d::INTERMEDIATE_RECORD_CAPACITY};
+                                     ap27_v3d::EARLY_RECORD_CAPACITY};
         check(vkResetCommandBuffer(cb,0),"reset command buffer");
         VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};check(vkBeginCommandBuffer(cb,&begin),"begin command buffer");
         vkCmdBindDescriptorSets(cb,VK_PIPELINE_BIND_POINT_COMPUTE,layout,0,1,&set,0,nullptr);
         vkCmdPushConstants(cb,layout,VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(push),&push);
-        for(uint32_t stage=0;stage<6;stage++){
+        // Setup, early sieve, prepare/middle sieve, prepare/late sieve, PRP.
+        for(uint32_t stage: {0u,1u,2u,6u,7u,3u,4u,5u}){
             vkCmdBindPipeline(cb,VK_PIPELINE_BIND_POINT_COMPUTE,pipelines[stage]);
             if(stage==0)vkCmdDispatch(cb,(n59+63)/64,1,1);
             else if(stage==1)vkCmdDispatch(cb,(n59+511)/512,1,1);
-            else if(stage==2||stage==4)vkCmdDispatch(cb,1,1,1);
+            else if(stage==2||stage==4||stage==7)vkCmdDispatch(cb,1,1,1);
             else vkCmdDispatchIndirect(cb,b[6].b,
-                (stage==3?ap27_v3d::SIEVE_DISPATCH_WORD:ap27_v3d::CHECK_DISPATCH_WORD)*sizeof(uint32_t));
+                (stage==3||stage==6?ap27_v3d::SIEVE_DISPATCH_WORD:ap27_v3d::CHECK_DISPATCH_WORD)*sizeof(uint32_t));
             VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};barrier.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT;
             barrier.dstAccessMask=stage==5?VK_ACCESS_HOST_READ_BIT:(VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT|VK_ACCESS_INDIRECT_COMMAND_READ_BIT);
             VkPipelineStageFlags dst=stage==5?VK_PIPELINE_STAGE_HOST_BIT:(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT|VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT);
@@ -197,6 +198,7 @@ struct V3D {
         check(vkWaitForFences(dev,1,&fence,VK_TRUE,300000000000ULL),"wait tile fence");
         const uint32_t* control=static_cast<const uint32_t*>(b[6].ptr);
         if(control[ap27_v3d::ERROR_FLAGS_WORD] ||
+           control[ap27_v3d::EARLY_RECORD_COUNT_WORD]>ap27_v3d::EARLY_RECORD_CAPACITY ||
            control[ap27_v3d::INTERMEDIATE_RECORD_COUNT_WORD]>ap27_v3d::INTERMEDIATE_RECORD_CAPACITY ||
            control[ap27_v3d::CANDIDATE_COUNT_WORD]>ap27_v3d::CANDIDATE_CAPACITY ||
            control[ap27_v3d::FINAL_RECORD_COUNT_WORD]>

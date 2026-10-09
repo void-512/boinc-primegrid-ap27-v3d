@@ -44,14 +44,14 @@ set_target_properties(BOINC::core PROPERTIES IMPORTED_LOCATION "${BOINC_CORE_LIB
 set(AP27_BIN_DIR "${CMAKE_BINARY_DIR}/bin")
 set(AP27_SHADER_DIR "${PROJECT_SOURCE_DIR}/shaders")
 set(AP27_SHADER_OUTPUTS)
-foreach(stage RANGE 0 5)
+foreach(stage RANGE 0 7)
     set(output "${AP27_BIN_DIR}/stage_${stage}.spv")
     add_custom_command(OUTPUT "${output}"
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${AP27_BIN_DIR}"
         COMMAND "${GLSLC_EXECUTABLE}" -O "-I${AP27_SHADER_DIR}"
             "-DSTAGE=${stage}" -fshader-stage=comp -o "${output}" "${AP27_SHADER_DIR}/tile.comp"
         DEPENDS "${AP27_SHADER_DIR}/tile.comp"
-            "${AP27_SHADER_DIR}/sieve_masks_early.glsl" "${AP27_SHADER_DIR}/sieve_masks_late.glsl"
+            "${AP27_SHADER_DIR}/sieve_masks_early.glsl" "${AP27_SHADER_DIR}/sieve_masks_middle.glsl" "${AP27_SHADER_DIR}/sieve_masks_late.glsl"
             "${AP27_SHADER_DIR}/ap27_math.glsl"
         VERBATIM)
     list(APPEND AP27_SHADER_OUTPUTS "${output}")

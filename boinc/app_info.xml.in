@@ -12,6 +12,8 @@
   <file><name>stage_3.spv</name></file>
   <file><name>stage_4.spv</name></file>
   <file><name>stage_5.spv</name></file>
+  <file><name>stage_6.spv</name></file>
+  <file><name>stage_7.spv</name></file>
   <app_version>
     <app_name>ap26</app_name>
     <version_num>212</version_num>
@@ -28,5 +30,7 @@
     <file_ref><file_name>stage_3.spv</file_name><open_name>stage_3.spv</open_name></file_ref>
     <file_ref><file_name>stage_4.spv</file_name><open_name>stage_4.spv</open_name></file_ref>
     <file_ref><file_name>stage_5.spv</file_name><open_name>stage_5.spv</open_name></file_ref>
+    <file_ref><file_name>stage_6.spv</file_name><open_name>stage_6.spv</open_name></file_ref>
+    <file_ref><file_name>stage_7.spv</file_name><open_name>stage_7.spv</open_name></file_ref>
   </app_version>
 </app_info>
