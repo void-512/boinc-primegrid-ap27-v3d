@@ -4,8 +4,9 @@
 #define INVERSE_FAST 1
 #include "ap27_math.glsl"
 
-#if STAGE==1
-layout(local_size_x=512) in;
+#define BULK_WORKGROUP_SIZE 192u
+#if STAGE==1 || STAGE==3 || STAGE==5 || STAGE==6
+layout(local_size_x=BULK_WORKGROUP_SIZE) in;
 #else
 layout(local_size_x=64) in;
 #endif
@@ -24,10 +25,6 @@ layout(std430,set=0,binding=6) buffer Control { uint c[]; } control_data;
 #if STAGE==1
 // First 32 primes: masks for shift and shift+64 share one aligned lookup.
 layout(std430,set=0,binding=7) readonly buffer PairedMasks { uvec4 m[]; } pair_data;
-#endif
-#if STAGE==5
-// Capacity equals candidate capacity: even every candidate being a hit fits.
-layout(std430,set=0,binding=8) buffer Hits { uvec4 h[]; } hit_data;
 #endif
 layout(push_constant) uniform Parameters {
     uvec4 values; // S59 low/high, STEP low/high
@@ -91,7 +88,7 @@ void compact_bit(uvec2 base,uint bit,uint shift) {
 void main() {
     uint idx=gl_GlobalInvocationID.x;
 #if STAGE==6
-    idx+=gl_GlobalInvocationID.y*(gl_NumWorkGroups.x*64u);
+    idx+=gl_GlobalInvocationID.y*(gl_NumWorkGroups.x*BULK_WORKGROUP_SIZE);
 #endif
 #if STAGE==0
     if(idx>=params.sizes.y) return;
@@ -156,7 +153,7 @@ void main() {
 #elif STAGE==2
     if(idx!=0u) return;
     // Keep both dispatch dimensions within V3D's 65535-workgroup limit.
-    uint groups=(min(control_data.c[INTERMEDIATE_RECORD_COUNT],params.sizes.w)+63u)/64u;
+    uint groups=(min(control_data.c[INTERMEDIATE_RECORD_COUNT],params.sizes.w)+BULK_WORKGROUP_SIZE-1u)/BULK_WORKGROUP_SIZE;
     bool two_rows=groups>65535u;
     control_data.c[SIEVE_DISPATCH]=two_rows ? (groups+1u)/2u : groups;
     control_data.c[SIEVE_DISPATCH+1u]=two_rows ? 2u : 1u;
@@ -200,11 +197,11 @@ void main() {
     if(idx!=0u) return;
     control_data.c[EARLY_RECORD_COUNT]=control_data.c[INTERMEDIATE_RECORD_COUNT];
     control_data.c[INTERMEDIATE_RECORD_COUNT]=control_data.c[MIDDLE_RECORD_COUNT];
-    control_data.c[SIEVE_DISPATCH]=(min(control_data.c[MIDDLE_RECORD_COUNT],uint(status_data.s.length()))+63u)/64u;
+    control_data.c[SIEVE_DISPATCH]=(min(control_data.c[MIDDLE_RECORD_COUNT],uint(status_data.s.length()))+BULK_WORKGROUP_SIZE-1u)/BULK_WORKGROUP_SIZE;
     control_data.c[SIEVE_DISPATCH+1u]=1u; control_data.c[SIEVE_DISPATCH+2u]=1u;
 #elif STAGE==4
     if(idx!=0u) return;
-    control_data.c[CHECK_DISPATCH]=(min(control_data.c[CANDIDATE_COUNT],params.sizes.z)+63u)/64u;
+    control_data.c[CHECK_DISPATCH]=(min(control_data.c[CANDIDATE_COUNT],params.sizes.z)+BULK_WORKGROUP_SIZE-1u)/BULK_WORKGROUP_SIZE;
     control_data.c[CHECK_DISPATCH+1u]=1u; control_data.c[CHECK_DISPATCH+2u]=1u;
 #elif STAGE==5
     if(idx>=min(control_data.c[CANDIDATE_COUNT],params.sizes.z)) return;
@@ -244,7 +241,9 @@ void main() {
         first=add64(m,step);
         flags|=2u;
         uint slot=atomicAdd(control_data.c[AP_HIT_COUNT],1u);
-        if(slot<params.sizes.z) hit_data.h[slot]=uvec4(count,first,flags);
+        // Early records are retired; the tail is disjoint from final records.
+        // Capacity equals candidate capacity, so even all candidates being hits fits.
+        if(slot<params.sizes.z) sieve_data.r[params.sizes.w-params.sizes.z+slot]=uvec4(count,first,flags);
         else atomicOr(control_data.c[ERROR_FLAGS],8u);
     }
     status_data.s[idx]=uvec4(count,first,flags);

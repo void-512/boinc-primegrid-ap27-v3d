@@ -9,9 +9,14 @@ inline constexpr uint32_t FIRST_STAGE_PRIME_COUNT = 32;
 inline constexpr uint32_t CANDIDATE_CAPACITY = 1'000'000;
 inline constexpr uint32_t EARLY_RECORD_CAPACITY = 6'000'000;
 inline constexpr uint32_t INTERMEDIATE_RECORD_CAPACITY = 1'000'000;
-static_assert(EARLY_RECORD_CAPACITY <= 2u * 65535u * 64u);
-static_assert(INTERMEDIATE_RECORD_CAPACITY <= 65535u * 64u);
+// Must match BULK_WORKGROUP_SIZE in shaders/tile.comp.
+inline constexpr uint32_t BULK_WORKGROUP_SIZE = 192;
+static_assert(EARLY_RECORD_CAPACITY <= 2u * 65535u * BULK_WORKGROUP_SIZE);
+static_assert(INTERMEDIATE_RECORD_CAPACITY <= 65535u * BULK_WORKGROUP_SIZE);
 static_assert(CANDIDATE_CAPACITY <= INTERMEDIATE_RECORD_CAPACITY);
+// After middle sieve, final records use the head and compact hits use the tail.
+inline constexpr uint32_t HIT_RECORD_OFFSET = EARLY_RECORD_CAPACITY - CANDIDATE_CAPACITY;
+static_assert(EARLY_RECORD_CAPACITY >= INTERMEDIATE_RECORD_CAPACITY + CANDIDATE_CAPACITY);
 inline constexpr uint64_t SECOND_SHIFT_RECORD_TAG = 1ULL << 48;
 
 // Matches the two uvec4 push-constant vectors in shaders/tile.comp.

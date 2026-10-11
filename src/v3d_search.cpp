@@ -102,7 +102,7 @@ struct V3D {
     VkInstance instance{}; VkDevice dev{}; VkQueue queue{}; VkPhysicalDevice gpu{};
     VkDescriptorSetLayout dsl{}; VkPipelineLayout layout{}; VkDescriptorPool pool{};
     VkDescriptorSet set{}; VkCommandPool command_pool{}; VkCommandBuffer cb{}; VkFence fence{};
-    std::array<Buffer,9> b{}; std::array<VkShaderModule,8> modules{};
+    std::array<Buffer,8> b{}; std::array<VkShaderModule,8> modules{};
     std::array<VkPipeline,8> pipelines{};
     // One in-flight tile: seeds/control change in mapped buffers; commands only
     // depend on K, shift and seed count (including the final partial tile).
@@ -126,24 +126,23 @@ struct V3D {
         float priority=1;VkDeviceQueueCreateInfo qc{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};qc.queueFamilyIndex=family;qc.queueCount=1;qc.pQueuePriorities=&priority;
         VkDeviceCreateInfo dc{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};dc.queueCreateInfoCount=1;dc.pQueueCreateInfos=&qc;
         check(vkCreateDevice(gpu,&dc,nullptr,&dev),"device");vkGetDeviceQueue(dev,family,0,&queue);
-        constexpr std::array<VkDeviceSize,9> sizes={sizeof(SeedData),sizeof(U2)*N59_COUNT,
+        constexpr std::array<VkDeviceSize,8> sizes={sizeof(SeedData),sizeof(U2)*N59_COUNT,
             sizeof(U2)*mask_count,sizeof(U4)*ap27_v3d::EARLY_RECORD_CAPACITY,
             sizeof(U2)*ap27_v3d::CANDIDATE_CAPACITY,
-            sizeof(U4)*ap27_v3d::INTERMEDIATE_RECORD_CAPACITY,64,sizeof(U4)*FIRST_MASK_COUNT,
-            sizeof(U4)*ap27_v3d::CANDIDATE_CAPACITY};
+            sizeof(U4)*ap27_v3d::INTERMEDIATE_RECORD_CAPACITY,64,sizeof(U4)*FIRST_MASK_COUNT};
         for(size_t i=0;i<b.size();++i)
             b[i]=make_buffer(dev,gpu,sizes[i],i==6?VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT:0);
-        VkDescriptorSetLayoutBinding lb[9]{};for(uint32_t i=0;i<b.size();i++){lb[i].binding=i;lb[i].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;lb[i].descriptorCount=1;lb[i].stageFlags=VK_SHADER_STAGE_COMPUTE_BIT;}
+        VkDescriptorSetLayoutBinding lb[8]{};for(uint32_t i=0;i<b.size();i++){lb[i].binding=i;lb[i].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;lb[i].descriptorCount=1;lb[i].stageFlags=VK_SHADER_STAGE_COMPUTE_BIT;}
         VkDescriptorSetLayoutCreateInfo lc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};lc.bindingCount=b.size();lc.pBindings=lb;
         check(vkCreateDescriptorSetLayout(dev,&lc,nullptr,&dsl),"descriptor layout");
         VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(ap27_v3d::PushConstants)};
         VkPipelineLayoutCreateInfo pc{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};pc.setLayoutCount=1;pc.pSetLayouts=&dsl;pc.pushConstantRangeCount=1;pc.pPushConstantRanges=&range;
         check(vkCreatePipelineLayout(dev,&pc,nullptr,&layout),"pipeline layout");
-        VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,9};VkDescriptorPoolCreateInfo dpc{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};dpc.maxSets=1;dpc.poolSizeCount=1;dpc.pPoolSizes=&ps;
+        VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,8};VkDescriptorPoolCreateInfo dpc{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};dpc.maxSets=1;dpc.poolSizeCount=1;dpc.pPoolSizes=&ps;
         check(vkCreateDescriptorPool(dev,&dpc,nullptr,&pool),"descriptor pool");
         VkDescriptorSetAllocateInfo da{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};da.descriptorPool=pool;da.descriptorSetCount=1;da.pSetLayouts=&dsl;
         check(vkAllocateDescriptorSets(dev,&da,&set),"descriptor set");
-        VkDescriptorBufferInfo info[9]{};VkWriteDescriptorSet writes[9]{};
+        VkDescriptorBufferInfo info[8]{};VkWriteDescriptorSet writes[8]{};
         for(uint32_t i=0;i<b.size();i++){info[i]={b[i].b,0,VK_WHOLE_SIZE};writes[i].sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;writes[i].dstSet=set;writes[i].dstBinding=i;writes[i].descriptorCount=1;writes[i].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;writes[i].pBufferInfo=&info[i];}
         vkUpdateDescriptorSets(dev,b.size(),writes,0,nullptr);
         char path[4096];ssize_t n=readlink("/proc/self/exe",path,sizeof(path)-1);
@@ -212,7 +211,7 @@ struct V3D {
         for(uint32_t stage: {0u,1u,2u,6u,7u,3u,4u,5u}){
             vkCmdBindPipeline(cb,VK_PIPELINE_BIND_POINT_COMPUTE,pipelines[stage]);
             if(stage==0)vkCmdDispatch(cb,(n59+63)/64,1,1);
-            else if(stage==1)vkCmdDispatch(cb,(n59+511)/512,1,1);
+            else if(stage==1)vkCmdDispatch(cb,(n59+ap27_v3d::BULK_WORKGROUP_SIZE-1)/ap27_v3d::BULK_WORKGROUP_SIZE,1,1);
             else if(stage==2||stage==4||stage==7)vkCmdDispatch(cb,1,1,1);
             else vkCmdDispatchIndirect(cb,b[6].b,
                 (stage==3||stage==6?ap27_v3d::SIEVE_DISPATCH_WORD:ap27_v3d::CHECK_DISPATCH_WORD)*sizeof(uint32_t));
@@ -248,7 +247,8 @@ struct V3D {
         uint32_t hit_count=control[ap27_v3d::AP_HIT_COUNT_WORD];
         if(hit_count>control[ap27_v3d::CANDIDATE_COUNT_WORD])
             throw std::runtime_error("V3D hit count overflow");
-        const U4* results=static_cast<const U4*>(b[8].ptr);
+        // Middle sieve has retired the early-record tail before PRP writes hits.
+        const U4* results=static_cast<const U4*>(b[3].ptr)+ap27_v3d::HIT_RECORD_OFFSET;
         for(uint32_t i=0;i<hit_count;i++) {
             if(!(results[i].w&2u) || results[i].x<10u)
                 throw std::runtime_error("V3D invalid hit record");

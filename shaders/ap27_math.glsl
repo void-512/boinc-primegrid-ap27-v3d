@@ -73,8 +73,11 @@ uvec2 mont(uvec2 a,uvec2 b,uvec2 n,uvec2 q) {
     return lt64(h,mh) ? add64(r,n) : r;
 }
 uvec2 one_mont(uvec2 n) {
-    uvec2 r=uvec2(1u,0u);
-    for(uint i=0u;i<64u;i++) r=addmod(r,r,n);
+    // For odd n>1, 2^h<n: the first h doublings never need reduction.
+    uint h=n.y!=0u ? 32u+uint(findMSB(n.y)) : uint(findMSB(n.x));
+    uint bit=1u<<(h&31u);
+    uvec2 r=h<32u ? uvec2(bit,0u) : uvec2(0u,bit);
+    for(uint i=h;i<64u;i++) r=addmod(r,r,n);
     return r;
 }
 uint getbit(uvec2 x,uint bit) { return bit<32u ? ((x.x>>bit)&1u) : ((x.y>>(bit-32u))&1u); }
@@ -91,11 +94,10 @@ bool strong_prp(uvec2 n,uvec2 q,uvec2 one) {
     uvec2 e=shr64(nm1,t);
     uvec2 a=one;
     uvec2 two=addmod(one,one,n);
-    bool begun=false;
-    for(int i=63;i>=0;i--) {
+    // e is nonzero for odd n>=3; skip only its leading zero bits.
+    int high=e.y!=0u ? 32+findMSB(e.y) : findMSB(e.x);
+    for(int i=high;i>=0;i--) {
         uint bit=getbit(e,uint(i));
-        if(!begun && bit==0u) continue;
-        begun=true;
         a=mont(a,a,n,q);
         if(bit!=0u) a=addmod(a,a,n);
     }
