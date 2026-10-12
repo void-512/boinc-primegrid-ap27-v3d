@@ -124,11 +124,11 @@ void main() {
         bits &= pair_data.m[199u+r73];
         bits &= pair_data.m[272u+r79];
         bits &= pair_data.m[351u+r83];
-        if((bits.x|bits.y|bits.z|bits.w)!=0u) {
-            a=n.x&0x3fffffffu;
-            b=(n.x>>30)|(n.y<<2);
-            bits=apply_early_prime_masks(a,b,bits);
-        }
+        // Generated AND checks preserve zero prefixes and reject later groups.
+        // Avoid the separate prefix predicate and merge before those checks.
+        a=n.x&0x3fffffffu;
+        b=(n.x>>30)|(n.y<<2);
+        bits=apply_early_prime_masks(a,b,bits);
         if((bits.x|bits.y)!=0u) {
             uint slot=atomicAdd(control_data.c[INTERMEDIATE_RECORD_COUNT],1u);
             if(slot<params.sizes.w) sieve_data.r[slot]=uvec4(n,bits.xy);
