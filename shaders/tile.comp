@@ -107,9 +107,10 @@ void main() {
     uvec2 n=n59_data.n[idx];
     uvec2 stride=params.values.xy;
     uint a=n.x&0x3fffffffu;
-    uint b=(n.x>>30)|(n.y<<2);
+    // n,stride < MOD < 2^48: expose the 18-bit high parts to Mesa.
+    uint b=((n.x>>30)|(n.y<<2))&0x3ffffu;
     uint sa=stride.x&0x3fffffffu;
-    uint sb=(stride.x>>30)|(stride.y<<2);
+    uint sb=((stride.x>>30)|(stride.y<<2))&0x3ffffu;
     // The first six primes use advancing residues; the generated fragment handles primes 7-32.
     uint r61=(a+60u*b)%61u, d61=(sa+60u*sb)%61u;
     uint r67=(a+25u*b)%67u, d67=(sa+25u*sb)%67u;
@@ -127,7 +128,7 @@ void main() {
         // Generated AND checks preserve zero prefixes and reject later groups.
         // Avoid the separate prefix predicate and merge before those checks.
         a=n.x&0x3fffffffu;
-        b=(n.x>>30)|(n.y<<2);
+        b=((n.x>>30)|(n.y<<2))&0x3ffffu;
         bits=apply_early_prime_masks(a,b,bits);
         if((bits.x|bits.y)!=0u) {
             uint slot=atomicAdd(control_data.c[INTERMEDIATE_RECORD_COUNT],1u);
