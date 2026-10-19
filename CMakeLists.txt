@@ -12,34 +12,9 @@ project(ap27_v3d LANGUAGES CXX)
 find_package(Vulkan REQUIRED)
 find_program(GLSLC_EXECUTABLE NAMES glslc REQUIRED)
 
-set(BOINC_ROOT "" CACHE PATH "BOINC development installation prefix")
-if(NOT BOINC_ROOT AND EXISTS "${PROJECT_SOURCE_DIR}/.local/sources/boinc-packages/root/usr/include/boinc/boinc_api.h")
-    set(BOINC_ROOT "${PROJECT_SOURCE_DIR}/.local/sources/boinc-packages/root/usr")
-endif()
-find_path(BOINC_INCLUDE_DIR NAMES boinc_api.h
-    HINTS "${BOINC_ROOT}" PATH_SUFFIXES include/boinc include)
-find_library(BOINC_API_LIBRARY NAMES boinc_api
-    HINTS "${BOINC_ROOT}" PATH_SUFFIXES "lib/${CMAKE_LIBRARY_ARCHITECTURE}" lib64 lib)
-find_library(BOINC_CORE_LIBRARY NAMES boinc
-    HINTS "${BOINC_ROOT}" PATH_SUFFIXES "lib/${CMAKE_LIBRARY_ARCHITECTURE}" lib64 lib)
-if(NOT BOINC_INCLUDE_DIR OR NOT BOINC_API_LIBRARY OR NOT BOINC_CORE_LIBRARY)
-    message(FATAL_ERROR "BOINC headers and shared libraries are required; install libboinc-app-dev or set BOINC_ROOT")
-endif()
+include(cmake/BOINC.cmake)
 
-get_filename_component(BOINC_API_REAL "${BOINC_API_LIBRARY}" REALPATH)
-get_filename_component(BOINC_CORE_REAL "${BOINC_CORE_LIBRARY}" REALPATH)
-get_filename_component(BOINC_API_FILE "${BOINC_API_REAL}" NAME)
-get_filename_component(BOINC_CORE_FILE "${BOINC_CORE_REAL}" NAME)
-string(REGEX MATCH "^libboinc_api\\.so\\.[0-9]+" BOINC_API_SONAME "${BOINC_API_FILE}")
-string(REGEX MATCH "^libboinc\\.so\\.[0-9]+" BOINC_CORE_SONAME "${BOINC_CORE_FILE}")
-if(NOT BOINC_API_SONAME OR NOT BOINC_CORE_SONAME)
-    message(FATAL_ERROR "Shared BOINC libraries with versioned SONAMEs are required for BOINC packaging")
-endif()
-
-add_library(BOINC::api UNKNOWN IMPORTED)
-set_target_properties(BOINC::api PROPERTIES IMPORTED_LOCATION "${BOINC_API_LIBRARY}")
-add_library(BOINC::core UNKNOWN IMPORTED)
-set_target_properties(BOINC::core PROPERTIES IMPORTED_LOCATION "${BOINC_CORE_LIBRARY}")
+option(AP27_STATIC_CXX_RUNTIME "Statically link the C++ and compiler runtimes when available" ON)
 
 set(AP27_BIN_DIR "${CMAKE_BINARY_DIR}/bin")
 set(AP27_SHADER_DIR "${PROJECT_SOURCE_DIR}/shaders")
@@ -63,10 +38,24 @@ add_executable(ap27_v3d
     src/v3d_search.cpp)
 target_compile_features(ap27_v3d PRIVATE cxx_std_20)
 set_target_properties(ap27_v3d PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES
-    CXX_EXTENSIONS NO RUNTIME_OUTPUT_DIRECTORY "${AP27_BIN_DIR}"
-    BUILD_WITH_INSTALL_RPATH YES INSTALL_RPATH "$ORIGIN")
-target_include_directories(ap27_v3d PRIVATE "${PROJECT_SOURCE_DIR}/include" "${BOINC_INCLUDE_DIR}")
-target_link_libraries(ap27_v3d PRIVATE Vulkan::Vulkan BOINC::api BOINC::core)
+    CXX_EXTENSIONS NO RUNTIME_OUTPUT_DIRECTORY "${AP27_BIN_DIR}")
+target_include_directories(ap27_v3d PRIVATE "${PROJECT_SOURCE_DIR}/include")
+target_link_libraries(ap27_v3d PRIVATE Vulkan::Vulkan BOINC::api)
+if(AP27_STATIC_CXX_RUNTIME)
+    include(CheckCXXSourceCompiles)
+    include(CMakePushCheckState)
+    cmake_push_check_state(RESET)
+    set(CMAKE_REQUIRED_LINK_OPTIONS -static-libstdc++ -static-libgcc)
+    check_cxx_source_compiles("#include <iostream>\nint main() { std::cout << 0; }"
+        AP27_HAS_STATIC_CXX_RUNTIME)
+    cmake_pop_check_state()
+    if(AP27_HAS_STATIC_CXX_RUNTIME)
+        target_link_options(ap27_v3d PRIVATE -static-libstdc++ -static-libgcc)
+    else()
+        message(WARNING "Static C++ runtime unavailable; using the shared runtime")
+    endif()
+endif()
+message(STATUS "BOINC is linked statically; Vulkan and the system C runtime remain shared")
 add_dependencies(ap27_v3d ap27_shaders)
 
 # Generate the V3D statistics monitor outside the BOINC payload, beside build/bin.
@@ -77,33 +66,13 @@ set_target_properties(v3d_smi PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 
 # The default build assembles exactly the files used by the BOINC app version.
-configure_file(app_info.xml "${AP27_BIN_DIR}/app_info.xml" @ONLY)
+configure_file(app_info.xml "${AP27_BIN_DIR}/app_info.xml" COPYONLY)
 set(AP27_APP_INFO "${AP27_BIN_DIR}/app_info.xml")
 set(AP27_RUNTIME_FILES ${AP27_SHADER_OUTPUTS})
-foreach(boinc_library IN ITEMS "${BOINC_API_REAL}" "${BOINC_CORE_REAL}")
-    get_filename_component(boinc_library_name "${boinc_library}" NAME)
-    string(REGEX MATCH "^libboinc(_api)?\\.so\\.[0-9]+" boinc_soname "${boinc_library_name}")
-    set(output "${AP27_BIN_DIR}/${boinc_soname}")
-    add_custom_command(OUTPUT "${output}"
-        COMMAND "${CMAKE_COMMAND}" -E make_directory "${AP27_BIN_DIR}"
-        COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${boinc_library}" "${output}"
-        DEPENDS "${boinc_library}" VERBATIM)
-    list(APPEND AP27_RUNTIME_FILES "${output}")
-endforeach()
-foreach(notice_path IN ITEMS
-    "${BOINC_ROOT}/share/doc/libboinc-app7t64/copyright"
-    "${BOINC_ROOT}/share/doc/libboinc-app-dev/copyright"
-    "/usr/share/doc/libboinc-app7t64/copyright"
-    "/usr/share/doc/libboinc-app-dev/copyright")
-    if(EXISTS "${notice_path}")
-        set(notice_output "${AP27_BIN_DIR}/BOINC-COPYRIGHT.txt")
-        add_custom_command(OUTPUT "${notice_output}"
-            COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${notice_path}" "${notice_output}"
-            DEPENDS "${notice_path}" VERBATIM)
-        list(APPEND AP27_RUNTIME_FILES "${notice_output}")
-        break()
-    endif()
-endforeach()
+configure_file("${BOINC_SOURCE_DIR}/COPYING" "${AP27_BIN_DIR}/BOINC-COPYING.txt" COPYONLY)
+configure_file("${BOINC_SOURCE_DIR}/COPYING.LESSER" "${AP27_BIN_DIR}/BOINC-COPYING.LESSER.txt" COPYONLY)
+list(APPEND AP27_RUNTIME_FILES
+    "${AP27_BIN_DIR}/BOINC-COPYING.txt" "${AP27_BIN_DIR}/BOINC-COPYING.LESSER.txt")
 add_custom_target(ap27_payload ALL DEPENDS ap27_v3d v3d_smi ${AP27_RUNTIME_FILES} "${AP27_APP_INFO}")
 
 set(AP27_INSTALL_DIR "${BOINC_WORK_DIR}/projects/www.primegrid.com")

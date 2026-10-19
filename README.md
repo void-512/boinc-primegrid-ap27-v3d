@@ -9,14 +9,14 @@ An AP27 search application for PrimeGrid's `ap26` BOINC work units. Its search a
 - `src/` and `include/ap27_v3d/`: BOINC host and V3D search implementation.
 - `shaders/`: GLSL compute stages and shared arithmetic.
 - `tools/`: sieve-table generator and GPU utilisation helper.
-- `boinc/`: anonymous-platform `app_info.xml` template.
+- `boinc/`: BOINC source submodule.
+- `app_info.xml`: anonymous-platform application manifest.
 
 ## Requirements
 
 - Raspberry Pi 5 with working Mesa V3DV Vulkan compute support.
 - CMake 3.31 or newer and a C++20 compiler (tested with GCC 14 and Clang-22).
 - Vulkan headers/loader and `glslc`.
-- BOINC application development headers and **shared** `libboinc_api` and `libboinc`. Set `-DBOINC_ROOT=/path/to/usr` if CMake cannot find them.
 
 ## Environment Setup
 
@@ -25,14 +25,12 @@ Refer to [boinc-setup.md](boinc-setup.md)
 ## Build
 
 ```bash
-git clone https://github.com/void-512/boinc-primegrid-ap27-v3d.git
+git clone --recurse-submodules https://github.com/void-512/boinc-primegrid-ap27-v3d.git
 cd boinc-primegrid-ap27-v3d
 mkdir build && cd build
-cmake .. -DBOINC_WORK_DIR=$(systemctl show -p WorkingDirectory --value boinc-client)
+cmake .. -DCMAKE_BUILD_TYPE=Release -DBOINC_WORK_DIR="$(systemctl show -p WorkingDirectory --value boinc-client)"
 make -j6
 ```
-
-The default build creates the complete BOINC payload in `build/bin/`: `ap27_v3d`, eight SPIR-V files, the required BOINC shared libraries, `app_info.xml`, and the BOINC copyright notice when available. The shader source is in `shaders/`; the host code is in `src/`.
 
 ## Install
 

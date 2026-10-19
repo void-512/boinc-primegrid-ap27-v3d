@@ -4,8 +4,6 @@
     <user_friendly_name>AP27 Search</user_friendly_name>
   </app>
   <file><name>ap27_v3d</name><executable/></file>
-  <file><name>@BOINC_API_SONAME@</name></file>
-  <file><name>@BOINC_CORE_SONAME@</name></file>
   <file><name>stage_0.spv</name></file>
   <file><name>stage_1.spv</name></file>
   <file><name>stage_2.spv</name></file>
@@ -22,8 +20,6 @@
     <avg_ncpus>1</avg_ncpus>
     <max_ncpus>1</max_ncpus>
     <file_ref><file_name>ap27_v3d</file_name><main_program/></file_ref>
-    <file_ref><file_name>@BOINC_API_SONAME@</file_name><open_name>@BOINC_API_SONAME@</open_name></file_ref>
-    <file_ref><file_name>@BOINC_CORE_SONAME@</file_name><open_name>@BOINC_CORE_SONAME@</open_name></file_ref>
     <file_ref><file_name>stage_0.spv</file_name><open_name>stage_0.spv</open_name></file_ref>
     <file_ref><file_name>stage_1.spv</file_name><open_name>stage_1.spv</open_name></file_ref>
     <file_ref><file_name>stage_2.spv</file_name><open_name>stage_2.spv</open_name></file_ref>
