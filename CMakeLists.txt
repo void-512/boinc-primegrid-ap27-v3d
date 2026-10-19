@@ -77,7 +77,7 @@ set_target_properties(v3d_smi PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 
 # The default build assembles exactly the files used by the BOINC app version.
-configure_file(boinc/app_info.xml.in "${AP27_BIN_DIR}/app_info.xml" @ONLY)
+configure_file(app_info.xml "${AP27_BIN_DIR}/app_info.xml" @ONLY)
 set(AP27_APP_INFO "${AP27_BIN_DIR}/app_info.xml")
 set(AP27_RUNTIME_FILES ${AP27_SHADER_OUTPUTS})
 foreach(boinc_library IN ITEMS "${BOINC_API_REAL}" "${BOINC_CORE_REAL}")
