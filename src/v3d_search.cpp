@@ -2,18 +2,17 @@
 #include "ap27_v3d/small_primes.hpp"
 #include "ap27_v3d/tile_layout.hpp"
 #include "ap27_v3d/v3d_search.h"
+#include "embedded_shaders.hpp"
 #include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <fstream>
 #include <memory>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <vector>
-#include <unistd.h>
 
 static constexpr uint64_t MOD=258559632607830ULL;
 static constexpr uint64_t PRIM23=223092870ULL;
@@ -61,13 +60,6 @@ void fill_masks(std::span<U2,mask_count> masks,uint64_t step,uint32_t shift){
             masks[prime.offset+i]=split(bits);
         }
     }
-}
-std::vector<uint32_t> read_spirv(const std::string& path){
-    std::ifstream f(path,std::ios::binary|std::ios::ate);if(!f)throw std::runtime_error("missing shader "+path);
-    auto n=f.tellg();if(n<=0||n%4)throw std::runtime_error("bad SPIR-V size");
-    f.seekg(0);std::vector<uint32_t>b(size_t(n)/4);
-    if(!f.read(reinterpret_cast<char*>(b.data()),n))throw std::runtime_error("cannot read shader "+path);
-    return b;
 }
 uint32_t memory_type(VkPhysicalDevice gpu,uint32_t bits,VkMemoryPropertyFlags flags){
     VkPhysicalDeviceMemoryProperties p;vkGetPhysicalDeviceMemoryProperties(gpu,&p);
@@ -145,12 +137,9 @@ struct V3D {
         VkDescriptorBufferInfo info[8]{};VkWriteDescriptorSet writes[8]{};
         for(uint32_t i=0;i<b.size();i++){info[i]={b[i].b,0,VK_WHOLE_SIZE};writes[i].sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;writes[i].dstSet=set;writes[i].dstBinding=i;writes[i].descriptorCount=1;writes[i].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;writes[i].pBufferInfo=&info[i];}
         vkUpdateDescriptorSets(dev,b.size(),writes,0,nullptr);
-        char path[4096];ssize_t n=readlink("/proc/self/exe",path,sizeof(path)-1);
-        if(n<0)throw std::runtime_error("cannot locate shader directory");path[n]=0;
-        std::string dir(path);dir.resize(dir.find_last_of('/'));
         for(int i=0;i<8;i++){
-            auto words=read_spirv(dir+"/stage_"+std::to_string(i)+".spv");
-            VkShaderModuleCreateInfo sm{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};sm.codeSize=words.size()*4;sm.pCode=words.data();
+            const auto words=ap27_v3d::shaders::stages[i];
+            VkShaderModuleCreateInfo sm{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};sm.codeSize=words.size_bytes();sm.pCode=words.data();
             check(vkCreateShaderModule(dev,&sm,nullptr,&modules[i]),"shader module");
             VkComputePipelineCreateInfo cp{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};cp.layout=layout;
             cp.stage={VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};cp.stage.stage=VK_SHADER_STAGE_COMPUTE_BIT;cp.stage.module=modules[i];cp.stage.pName="main";

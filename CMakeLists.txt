@@ -18,12 +18,13 @@ option(AP27_STATIC_CXX_RUNTIME "Statically link the C++ and compiler runtimes wh
 
 set(AP27_BIN_DIR "${CMAKE_BINARY_DIR}/bin")
 set(AP27_SHADER_DIR "${PROJECT_SOURCE_DIR}/shaders")
+set(AP27_SHADER_BUILD_DIR "${CMAKE_CURRENT_BINARY_DIR}/shaders")
 set(AP27_SHADER_OUTPUTS)
 foreach(stage RANGE 0 7)
-    set(output "${AP27_BIN_DIR}/stage_${stage}.spv")
+    set(output "${AP27_SHADER_BUILD_DIR}/stage_${stage}.spv.inc")
     add_custom_command(OUTPUT "${output}"
-        COMMAND "${CMAKE_COMMAND}" -E make_directory "${AP27_BIN_DIR}"
-        COMMAND "${GLSLC_EXECUTABLE}" -O "-I${AP27_SHADER_DIR}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${AP27_SHADER_BUILD_DIR}"
+        COMMAND "${GLSLC_EXECUTABLE}" -O -mfmt=c "-I${AP27_SHADER_DIR}"
             "-DSTAGE=${stage}" -fshader-stage=comp -o "${output}" "${AP27_SHADER_DIR}/tile.comp"
         DEPENDS "${AP27_SHADER_DIR}/tile.comp"
             "${AP27_SHADER_DIR}/sieve_masks_early.glsl" "${AP27_SHADER_DIR}/sieve_masks_middle.glsl" "${AP27_SHADER_DIR}/sieve_masks_late.glsl"
@@ -39,7 +40,8 @@ add_executable(ap27_v3d
 target_compile_features(ap27_v3d PRIVATE cxx_std_20)
 set_target_properties(ap27_v3d PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES
     CXX_EXTENSIONS NO RUNTIME_OUTPUT_DIRECTORY "${AP27_BIN_DIR}")
-target_include_directories(ap27_v3d PRIVATE "${PROJECT_SOURCE_DIR}/include")
+target_include_directories(ap27_v3d PRIVATE
+    "${PROJECT_SOURCE_DIR}/include" "${AP27_SHADER_BUILD_DIR}")
 target_link_libraries(ap27_v3d PRIVATE Vulkan::Vulkan BOINC::api)
 if(AP27_STATIC_CXX_RUNTIME)
     include(CheckCXXSourceCompiles)
@@ -55,7 +57,7 @@ if(AP27_STATIC_CXX_RUNTIME)
         message(WARNING "Static C++ runtime unavailable; using the shared runtime")
     endif()
 endif()
-message(STATUS "BOINC is linked statically; Vulkan and the system C runtime remain shared")
+
 add_dependencies(ap27_v3d ap27_shaders)
 
 # Generate the V3D statistics monitor outside the BOINC payload, beside build/bin.
@@ -68,7 +70,7 @@ set_target_properties(v3d_smi PROPERTIES
 # The default build assembles exactly the files used by the BOINC app version.
 configure_file(app_info.xml "${AP27_BIN_DIR}/app_info.xml" COPYONLY)
 set(AP27_APP_INFO "${AP27_BIN_DIR}/app_info.xml")
-set(AP27_RUNTIME_FILES ${AP27_SHADER_OUTPUTS})
+set(AP27_RUNTIME_FILES)
 configure_file("${BOINC_SOURCE_DIR}/COPYING" "${AP27_BIN_DIR}/BOINC-COPYING.txt" COPYONLY)
 configure_file("${BOINC_SOURCE_DIR}/COPYING.LESSER" "${AP27_BIN_DIR}/BOINC-COPYING.LESSER.txt" COPYONLY)
 list(APPEND AP27_RUNTIME_FILES
