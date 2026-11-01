@@ -62,6 +62,8 @@ add_dependencies(ap27_v3d ap27_shaders)
 
 # Generate the V3D statistics monitor outside the BOINC payload, beside build/bin.
 add_executable(v3d_smi tools/v3d_smi.cpp)
+find_path(V3D_DRM_INCLUDE_DIR v3d_drm.h PATH_SUFFIXES drm libdrm REQUIRED)
+target_include_directories(v3d_smi PRIVATE "${V3D_DRM_INCLUDE_DIR}")
 target_compile_features(v3d_smi PRIVATE cxx_std_17)
 set_target_properties(v3d_smi PROPERTIES
     CXX_STANDARD 17 CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO
