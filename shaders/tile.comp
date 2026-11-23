@@ -44,14 +44,41 @@ const uint FINAL_SIEVE_RECORD_COUNT=12u;
 const uint MIDDLE_RECORD_COUNT=13u;
 const uint EARLY_RECORD_COUNT=14u;
 
+#if STAGE==1 || STAGE==3 || STAGE==6
+// The sieve residue is below 2^48. Fold it modulo each prime using
+// four 12-bit limbs and the generated weights for powers of 4096.
+uvec4 sieve_limbs(uvec2 n) {
+    return uvec4(n.x&4095u, (n.x>>12u)&4095u,
+                 (n.x>>24u)|((n.y&15u)<<8u), n.y>>4u);
+}
+
+uint sieve_remainder(uvec4 limbs, uvec3 weights, uint prime, float reciprocal) {
+    uint sum=limbs.x + weights.x*limbs.y + weights.y*limbs.z + weights.z*limbs.w;
+    // gen_sieve.py bounds the conversion and product error for every prime.
+    uint quotient=uint(float(sum)*reciprocal);
+    return sum-quotient*prime;
+}
+#endif
+
 #if STAGE==1
 #include "sieve_masks_early.glsl"
 
-uint advance_residue(uint r, uint stride_r, uint p, uint mod_r, bool wrapped) {
-    int next=int(r)+int(stride_r)-(wrapped ? int(mod_r) : 0);
-    if(next<0) next+=int(p);
-    if(next>=int(p)) next-=int(p);
-    return uint(next);
+uint pack_sieve_bytes(uvec4 r) {
+    return r.x | (r.y<<8u) | (r.z<<16u) | (r.w<<24u);
+}
+
+uint advance_packed_residues(uint residues, uint delta, uint primes) {
+    // Each occupied byte holds r + (128 - p). Adding delta < p
+    // sets bit 7 exactly when r + delta >= p and keeps each sum below 256.
+    uint sum=residues+delta;
+    uint carries=sum&0x80808080u;
+    // Each set bit 7 expands to 0x7f within its byte. Thus the
+    // subtraction removes p only where the addition crossed its modulus.
+    return sum-(primes&(carries-(carries>>7u)));
+}
+
+uint wrapped_delta(uint delta, uint prime, uint mod_r) {
+    return delta<mod_r ? delta+(prime-mod_r) : delta-mod_r;
 }
 #endif
 #if STAGE==3
@@ -112,24 +139,31 @@ void main() {
     uint sa=stride.x&0x3fffffffu;
     uint sb=((stride.x>>30)|(stride.y<<2))&0x3ffffu;
     // The first six primes use advancing residues; the generated fragment handles primes 7-32.
-    uint r61=(a+60u*b)%61u, d61=(sa+60u*sb)%61u;
-    uint r67=(a+25u*b)%67u, d67=(sa+25u*sb)%67u;
-    uint r71=(a+20u*b)%71u, d71=(sa+20u*sb)%71u;
-    uint r73=(a+8u*b)%73u, d73=(sa+8u*sb)%73u;
-    uint r79=(a+52u*b)%79u, d79=(sa+52u*sb)%79u;
-    uint r83=(a+40u*b)%83u, d83=(sa+40u*sb)%83u;
+    uint d61=(sa+60u*sb)%61u, d67=(sa+25u*sb)%67u;
+    uint d71=(sa+20u*sb)%71u, d73=(sa+8u*sb)%73u;
+    uint d79=(sa+52u*sb)%79u, d83=(sa+40u*sb)%83u;
+    uint delta0=pack_sieve_bytes(uvec4(d61,d67,d71,d73));
+    uint delta1=pack_sieve_bytes(uvec4(d79,d83,0u,0u));
+    // When n wraps, the step in each byte is (stride - MOD) modulo its prime.
+    uint wrapped0=pack_sieve_bytes(uvec4(wrapped_delta(d61,61u,43u),wrapped_delta(d67,67u,48u),
+                                       wrapped_delta(d71,71u,33u),wrapped_delta(d73,73u,53u)));
+    uint wrapped1=pack_sieve_bytes(uvec4(wrapped_delta(d79,79u,21u),wrapped_delta(d83,83u,73u),0u,0u));
+    const uint primes0=pack_sieve_bytes(uvec4(61u,67u,71u,73u));
+    const uint primes1=pack_sieve_bytes(uvec4(79u,83u,0u,0u));
+    uint r0=pack_sieve_bytes(uvec4((a+60u*b)%61u+67u,(a+25u*b)%67u+61u,
+                                  (a+20u*b)%71u+57u,(a+8u*b)%73u+55u));
+    uint r1=pack_sieve_bytes(uvec4((a+52u*b)%79u+49u,(a+40u*b)%83u+45u,0u,0u));
     for(uint iter=0u;iter<35u;iter++) {
-        uvec4 bits=pair_data.m[r61];
-        bits &= pair_data.m[61u+r67];
-        bits &= pair_data.m[128u+r71];
-        bits &= pair_data.m[199u+r73];
-        bits &= pair_data.m[272u+r79];
-        bits &= pair_data.m[351u+r83];
+        // Lookup offsets below are the table row offsets minus the byte bias.
+        uvec4 bits=pair_data.m[(r0&255u)-67u];
+        bits &= pair_data.m[(r0>>8u)&255u];
+        bits &= pair_data.m[((r0>>16u)&255u)+71u];
+        bits &= pair_data.m[(r0>>24u)+144u];
+        bits &= pair_data.m[(r1&255u)+223u];
+        bits &= pair_data.m[((r1>>8u)&255u)+306u];
         // Generated AND checks preserve zero prefixes and reject later groups.
         // Avoid the separate prefix predicate and merge before those checks.
-        a=n.x&0x3fffffffu;
-        b=((n.x>>30)|(n.y<<2))&0x3ffffu;
-        bits=apply_early_prime_masks(a,b,bits);
+        bits=apply_early_prime_masks(n,bits);
         if((bits.x|bits.y)!=0u) {
             uint slot=atomicAdd(control_data.c[INTERMEDIATE_RECORD_COUNT],1u);
             if(slot<params.sizes.w) sieve_data.r[slot]=uvec4(n,bits.xy);
@@ -143,13 +177,8 @@ void main() {
         uvec2 sum=add64(n,stride);
         bool wrapped=!lt64(sum,MOD);
         n=wrapped ? sub64(sum,MOD) : sum;
-        // The last argument is MOD % p, removed only when n wraps modulo MOD.
-        r61=advance_residue(r61,d61,61u,43u,wrapped);
-        r67=advance_residue(r67,d67,67u,48u,wrapped);
-        r71=advance_residue(r71,d71,71u,33u,wrapped);
-        r73=advance_residue(r73,d73,73u,53u,wrapped);
-        r79=advance_residue(r79,d79,79u,21u,wrapped);
-        r83=advance_residue(r83,d83,83u,73u,wrapped);
+        r0=advance_packed_residues(r0,wrapped ? wrapped0 : delta0,primes0);
+        r1=advance_packed_residues(r1,wrapped ? wrapped1 : delta1,primes1);
     }
 #elif STAGE==2
     if(idx!=0u) return;
@@ -166,7 +195,7 @@ void main() {
     bool second_shift=(base.y&SECOND_SHIFT_TAG)!=0u;
     uint shift=params.sizes.x+(second_shift ? PAIRED_SHIFT_OFFSET : 0u);
     base.y&=~SECOND_SHIFT_TAG;
-    uvec2 final_mask=apply_late_prime_masks(base.x&0x3fffffffu,(base.x>>30)|(base.y<<2),intermediate_record.zw,second_shift);
+    uvec2 final_mask=apply_late_prime_masks(base,intermediate_record.zw,second_shift);
     sieve_data.r[idx]=uvec4(intermediate_record.xy,final_mask);
     if((final_mask.x|final_mask.y)==0u) return;
     atomicAdd(control_data.c[FINAL_SIEVE_RECORD_COUNT],1u);
@@ -188,7 +217,7 @@ void main() {
     uvec2 base=record.xy;
     bool second_shift=(base.y&SECOND_SHIFT_TAG)!=0u;
     base.y&=~SECOND_SHIFT_TAG;
-    uvec2 middle_mask=apply_middle_prime_masks(base.x&0x3fffffffu,(base.x>>30)|(base.y<<2),record.zw,second_shift);
+    uvec2 middle_mask=apply_middle_prime_masks(base,record.zw,second_shift);
     if((middle_mask.x|middle_mask.y)!=0u) {
         uint slot=atomicAdd(control_data.c[MIDDLE_RECORD_COUNT],1u);
         if(slot<uint(status_data.s.length())) status_data.s[slot]=uvec4(record.xy,middle_mask);
